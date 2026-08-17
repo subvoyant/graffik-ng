@@ -6,21 +6,29 @@ contextBridge.exposeInMainWorld("nmx", {
   connect: (path) => ipcRenderer.invoke("nmx:connect", path),
   disconnect: () => ipcRenderer.invoke("nmx:disconnect"),
   overrideFirmwareGate: () => ipcRenderer.invoke("nmx:override-firmware-gate"),
+  // preferences
+  getPrefs: () => ipcRenderer.invoke("nmx:get-prefs"),
+  setPrefs: (patch) => ipcRenderer.invoke("nmx:set-prefs", patch),
+  // soft limits
+  getLimits: () => ipcRenderer.invoke("nmx:get-limits"),
+  setLimitHere: (motor, bound) => ipcRenderer.invoke("nmx:set-limit-here", motor, bound),
+  clearLimits: (motor) => ipcRenderer.invoke("nmx:clear-limits", motor),
+  onLimitHit: (fn) => ipcRenderer.on("nmx:limit-hit", (_e, d) => fn(d)),
   // jog
   enableMotors: () => ipcRenderer.invoke("nmx:enable-motors"),
   jog: (motor, stepsPerSec) => ipcRenderer.invoke("nmx:jog", motor, stepsPerSec),
   position: (motor) => ipcRenderer.invoke("nmx:position", motor),
-  // classic 2-point engine
+  // classic engine
   setStartHere: () => ipcRenderer.invoke("nmx:set-start-here"),
   setStopHere: () => ipcRenderer.invoke("nmx:set-stop-here"),
-  armMove: (travelMs, accelMs, decelMs) => ipcRenderer.invoke("nmx:arm-move", travelMs, accelMs, decelMs),
+  armMove: (t, a, d) => ipcRenderer.invoke("nmx:arm-move", t, a, d),
   gotoStart: () => ipcRenderer.invoke("nmx:goto-start"),
   run: () => ipcRenderer.invoke("nmx:run"),
   pause: () => ipcRenderer.invoke("nmx:pause"),
   progress: () => ipcRenderer.invoke("nmx:progress"),
-  // key-frame engine + timeline
-  previewMove: (axes, durationMs, sampleCount) => ipcRenderer.invoke("nmx:preview-move", axes, durationMs, sampleCount),
-  uploadKf: (axes, durationMs) => ipcRenderer.invoke("nmx:upload-kf", axes, durationMs),
+  // key-frame engine
+  previewMove: (axes, dur, n) => ipcRenderer.invoke("nmx:preview-move", axes, dur, n),
+  uploadKf: (axes, dur) => ipcRenderer.invoke("nmx:upload-kf", axes, dur),
   kfRun: () => ipcRenderer.invoke("nmx:kf-run"),
   kfStop: () => ipcRenderer.invoke("nmx:kf-stop"),
   kfProgress: () => ipcRenderer.invoke("nmx:kf-progress"),
@@ -29,9 +37,9 @@ contextBridge.exposeInMainWorld("nmx", {
   camArm: (cfg) => ipcRenderer.invoke("nmx:cam-arm", cfg),
   camFire: () => ipcRenderer.invoke("nmx:cam-fire"),
   camDisable: () => ipcRenderer.invoke("nmx:cam-disable"),
-  // film save/load
+  // films
   saveFilm: (film) => ipcRenderer.invoke("nmx:save-film", film),
-  loadFilm: () => ipcRenderer.invoke("nmx:load-film"),
+  loadFilm: (path) => ipcRenderer.invoke("nmx:load-film", path),
   // e-stop
   stopAll: () => ipcRenderer.invoke("nmx:stop-all"),
 });

@@ -5,3 +5,4 @@ export * from "./spline.js";
 export * from "./move.js";
 export * from "./simulator.js";
 export * from "./film.js";
+export * from "./limits.js";

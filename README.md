@@ -8,7 +8,11 @@ motion controller — built for live-action, repeatable, multi-pass camera moves
 (motion-control "multiplicity", where one performer appears several times in a
 composited shot because the camera repeats its move exactly).
 
-![Graffik NG — jog controls, key-frame timeline editor, pass controls, and camera trigger](docs/images/graffik-ng-app.png)
+![Graffik NG — jog controls, taught soft travel limits, three-track key-frame timeline with solved motion curves, keyframe inspector, pass controls, and camera trigger](docs/images/graffik-ng-app.png)
+
+<sub>Key-frame move across slide / pan / tilt. Red bands are the taught soft
+travel limits; the curves are solved by the same code that uploads to the
+controller, so what you see is what the rig executes.</sub>
 
 ## What it does
 
@@ -107,6 +111,7 @@ and executed on-device, so host timing never enters the picture
 ## Documentation
 
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — setup, daily loop, packaging, troubleshooting
+- [`docs/HARDWARE-BRINGUP.md`](docs/HARDWARE-BRINGUP.md) — first-contact protocol, repeatability testing, safe limits
 - [`docs/adr/`](docs/adr/README.md) — architecture decision records (the *why*)
 - [`docs/digests/HUB.md`](docs/digests/HUB.md) — system map and invariants (the *how*)
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — conventions and hard rules

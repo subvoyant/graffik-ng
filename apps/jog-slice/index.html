@@ -4,127 +4,449 @@
 <meta charset="utf-8" />
 <title>Graffik NG</title>
 <style>
-  :root { color-scheme: dark; --bg:#14161a; --panel:#1b1f25; --line:#2a2e35; --line2:#39404a; --fg:#e6e8eb; --dim:#9aa3ad; --slide:#5aa9e6; --pan:#f4a259; --tilt:#8fd694; }
-  body { font: 13px/1.4 -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--fg); margin: 0; padding: 10px 16px 14px; }
-  fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 8px; padding: 6px 12px 8px; }
-  legend { padding: 0 6px; color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
-  button { background: #262b33; color: var(--fg); border: 1px solid var(--line2); border-radius: 6px; padding: 5px 11px; cursor: pointer; font-size: 13px; }
-  button:hover { background: #2f3541; }
-  button:disabled { opacity: .35; cursor: default; }
-  button.active { border-color: var(--slide); color: var(--slide); }
-  select, input[type=number], input[type=text] { background: var(--panel); color: var(--fg); border: 1px solid var(--line2); border-radius: 6px; padding: 4px 7px; font-size: 13px; }
-  input[type=number] { width: 62px; }
-  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  .row + .row { margin-top: 6px; }
-  label.small { color: var(--dim); font-size: 11px; }
-  .axisrow { display: grid; grid-template-columns: 42px 54px 1fr 54px 100px; gap: 8px; align-items: center; margin: 4px 0; }
-  .axisrow .pos { font-variant-numeric: tabular-nums; color: var(--dim); text-align: right; }
-  .jogbtn { user-select: none; font-size: 15px; padding: 3px 0; width: 54px; }
-  .axisname { font-weight: 600; }
-  .c-slide { color: var(--slide); } .c-pan { color: var(--pan); } .c-tilt { color: var(--tilt); }
-  #timeline { width: 100%; height: 234px; display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; cursor: crosshair; touch-action: none; }
-  #estop { width: 100%; background: #7f1d1d; border-color: #b91c1c; font-size: 16px; font-weight: 700; padding: 10px; margin-top: 2px; }
-  #estop:hover { background: #991b1b; }
-  #status { color: var(--dim); min-height: 1.3em; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  #fwbadge.bad { color: #f87171; font-weight: 600; }
-  #countdown { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(10,12,15,.82); font-size: 120px; font-weight: 800; z-index: 10; letter-spacing: .05em; }
-  #passlog { max-height: 52px; overflow-y: auto; font-size: 11px; color: var(--dim); margin-top: 2px; }
-  #passlog div { padding: 1px 0; border-bottom: 1px dotted var(--line); }
-  progress { width: 100%; height: 6px; }
-  .hint { font-size: 10.5px; color: var(--dim); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* ============================================================
+   Graffik NG — design tokens
+   Idiom: professional 3D/compositing applications (Blender,
+   Cinema 4D, Resolve, Nuke). Neutral dark greys — never pure
+   black, never blue-tinted. Elevation by value steps + hairlines,
+   not shadows. Inputs are RECESSED (darker than their panel),
+   which is the convention that makes fields read as carved in.
+   Axis colors are the dataviz categorical slots 1–3, validated
+   for colorblind separation on this surface (see ADR-0012).
+   ============================================================ */
+:root {
+  color-scheme: dark;
+
+  --bg-app:      #131517;
+  --bg-panel:    #1e2124;
+  --bg-raised:   #262a2e;
+  --bg-field:    #121416;
+  --bg-canvas:   #101215;
+
+  --line:        #2c3136;
+  --line-hi:     #3b4249;
+
+  --ink:         #e8eaed;
+  --ink-dim:     #9aa3ab;
+  --ink-faint:   #6b747c;
+
+  --accent:      #3987e5;
+  --accent-dim:  #2a6bb8;
+
+  --slide:       #3987e5;
+  --pan:         #d95926;
+  --tilt:        #199e70;
+
+  --danger:      #a93226;
+  --danger-hi:   #cf4436;
+  --ok:          #199e70;
+  --warn:        #c98500;
+
+  --r:           4px;
+  --dur:         120ms;
+
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-app);
+  color: var(--ink);
+  font: 12px/1.4 -apple-system, "SF Pro Text", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* ---------- app bar ---------- */
+.appbar {
+  display: flex; align-items: center; gap: 8px;
+  height: 38px; padding: 0 10px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+.brand { font-size: 11px; font-weight: 700; letter-spacing: .13em; color: var(--ink-dim); padding-right: 6px; }
+.brand b { color: var(--ink); }
+.sep { width: 1px; height: 18px; background: var(--line); }
+.grow { flex: 1; }
+
+/* ---------- controls ---------- */
+button {
+  appearance: none;
+  background: var(--bg-raised);
+  color: var(--ink);
+  border: 1px solid var(--line-hi);
+  border-radius: var(--r);
+  padding: 4px 9px;
+  font: inherit; font-size: 11.5px;
+  cursor: pointer;
+  transition: background var(--dur), border-color var(--dur), color var(--dur);
+  white-space: nowrap;
+}
+button:hover:not(:disabled) { background: #30353a; }
+button:active:not(:disabled) { background: #1a1d20; }
+button:disabled { opacity: .32; cursor: default; }
+button.primary { background: var(--accent-dim); border-color: var(--accent); }
+button.primary:hover:not(:disabled) { background: var(--accent); }
+button.toggled { background: var(--accent-dim); border-color: var(--accent); color: #fff; }
+button.icon { padding: 4px 7px; }
+
+select, input {
+  background: var(--bg-field);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 4px 7px;
+  font: inherit; font-size: 11.5px;
+  transition: border-color var(--dur);
+}
+select:focus, input:focus { outline: none; border-color: var(--accent); }
+input[type=number], input.num {
+  font-family: var(--mono); font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right; width: 62px;
+  cursor: ew-resize;                    /* drag-scrub affordance */
+  -moz-appearance: textfield;
+}
+input[type=number]::-webkit-outer-spin-button,
+input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input.scrubbing { border-color: var(--accent); background: #171b1f; }
+input[type=text] { font-size: 11.5px; }
+
+.field { display: inline-flex; align-items: center; gap: 5px; }
+.field > label { color: var(--ink-faint); font-size: 10.5px; letter-spacing: .02em; }
+
+/* ---------- layout ---------- */
+.main { flex: 1; display: flex; min-height: 0; gap: 1px; background: var(--line); }
+.rail { width: 244px; flex: none; background: var(--bg-app); display: flex; flex-direction: column; gap: 1px; overflow-y: auto; }
+.stage { flex: 1; min-width: 0; background: var(--bg-app); display: flex; flex-direction: column; gap: 1px; }
+
+.panel { background: var(--bg-panel); display: flex; flex-direction: column; }
+.panel > header {
+  display: flex; align-items: center; gap: 6px;
+  height: 24px; padding: 0 9px; flex: none;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--line);
+  font-size: 9.5px; font-weight: 600; letter-spacing: .11em; text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.panel > .body { padding: 8px 9px; display: flex; flex-direction: column; gap: 7px; }
+.row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* ---------- axis rows ---------- */
+.axis { display: grid; grid-template-columns: 12px 46px 1fr 1fr 74px; gap: 6px; align-items: center; }
+.swatch { width: 8px; height: 8px; border-radius: 2px; }
+.axis .nm { font-size: 11px; color: var(--ink-dim); }
+.axis .pos { font-family: var(--mono); font-size: 10.5px; font-variant-numeric: tabular-nums; color: var(--ink-faint); text-align: right; }
+.jogbtn { padding: 3px 0; font-size: 13px; line-height: 1; }
+.jogbtn:active:not(:disabled) { background: var(--accent-dim); border-color: var(--accent); }
+
+/* ---------- timeline ---------- */
+.tl-head { display: flex; align-items: center; gap: 6px; padding: 6px 9px; background: var(--bg-panel); border-bottom: 1px solid var(--line); flex: none; }
+#timeline { flex: 1; width: 100%; display: block; background: var(--bg-canvas); cursor: crosshair; touch-action: none; min-height: 180px; }
+.tl-foot { display: flex; align-items: center; gap: 6px; padding: 6px 9px; background: var(--bg-panel); border-top: 1px solid var(--line); flex: none; flex-wrap: wrap; }
+.hint { font-size: 10px; color: var(--ink-faint); padding: 3px 9px 5px; background: var(--bg-panel); }
+.hint kbd { font-family: var(--mono); font-size: 9.5px; background: var(--bg-field); border: 1px solid var(--line); border-radius: 3px; padding: 0 3px; color: var(--ink-dim); }
+
+/* ---------- progress ---------- */
+.meter { height: 3px; background: var(--bg-field); border-radius: 2px; overflow: hidden; flex: 1; min-width: 60px; }
+.meter > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 240ms linear; }
+
+/* ---------- status bar ---------- */
+.statusbar {
+  display: flex; align-items: center; gap: 10px;
+  height: 30px; padding: 0 10px; flex: none;
+  background: var(--bg-raised); border-top: 1px solid var(--line);
+  font-size: 11px; color: var(--ink-dim);
+}
+#status { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 7px; border-radius: 9px;
+  background: var(--bg-field); border: 1px solid var(--line);
+  font-size: 10.5px; font-family: var(--mono);
+}
+.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-faint); }
+.dot.on { background: var(--ok); box-shadow: 0 0 5px var(--ok); }
+.dot.bad { background: var(--danger-hi); }
+#fwchip.bad { border-color: var(--danger-hi); color: #f0a79c; }
+
+#estop {
+  background: var(--danger); border-color: var(--danger-hi); color: #fff;
+  font-weight: 700; letter-spacing: .09em; font-size: 11px; padding: 5px 16px;
+}
+#estop:hover { background: var(--danger-hi); }
+
+/* ---------- pass log ---------- */
+/* Pass log is the rail's elastic panel: it absorbs leftover height and scrolls
+   internally, so the rail itself never overflows (no-page-scroll rule, ADR-0012). */
+.rail > .panel:last-child { flex: 1 1 auto; min-height: 56px; }
+.rail > .panel:last-child > .body { flex: 1; min-height: 0; }
+#passlog { flex: 1; min-height: 0; overflow-y: auto; font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
+#passlog div { padding: 1px 0; }
+#passlog b { color: var(--ink-dim); font-weight: 400; }
+
+/* ---------- countdown overlay ---------- */
+#countdown {
+  position: fixed; inset: 0; display: none; align-items: center; justify-content: center;
+  background: rgba(10,12,14,.86); z-index: 50; flex-direction: column; gap: 6px;
+}
+#countdown .n { font-family: var(--mono); font-size: 128px; font-weight: 200; color: var(--ink); letter-spacing: -.04em; }
+#countdown .lbl { font-size: 11px; letter-spacing: .2em; text-transform: uppercase; color: var(--ink-faint); }
+
+/* ---------- soft limits ---------- */
+.lim { display: grid; grid-template-columns: 12px 42px 1fr 1fr 20px; gap: 5px; align-items: center; margin: 3px 0; }
+.lim .nm { font-size: 11px; color: var(--ink-dim); }
+.lim button { font-family: var(--mono); font-size: 9.5px; padding: 3px 4px; }
+.lim button.set { color: var(--ok); border-color: #2c4a3e; }
+.lim button.unset { color: var(--ink-faint); }
+.lim .clr { padding: 3px 5px; font-size: 10px; color: var(--ink-faint); }
+
+/* ---------- modal ---------- */
+.modal { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(8,10,12,.7); z-index: 40; }
+.modal.open { display: flex; }
+.sheet { background: var(--bg-panel); border: 1px solid var(--line-hi); border-radius: 6px; min-width: 380px; max-width: 560px; max-height: 82vh; overflow: auto; }
+.sheet > header { display: flex; align-items: center; height: 32px; padding: 0 12px; background: var(--bg-raised); border-bottom: 1px solid var(--line);
+  font-size: 10px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-faint); }
+.sheet > .body { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.sheet .close { margin-left: auto; }
+.kbdrow { display: grid; grid-template-columns: 150px 1fr; gap: 8px; font-size: 11.5px; align-items: baseline; }
+.kbdrow span:first-child { font-family: var(--mono); font-size: 10.5px; color: var(--accent); }
+.kbdrow span:last-child { color: var(--ink-dim); }
+.sect { font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-faint); margin-top: 4px; }
+.bindrow { display: grid; grid-template-columns: 46px 1fr 62px 54px; gap: 7px; align-items: center; }
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-track { background: var(--bg-app); }
+::-webkit-scrollbar-thumb { background: #33383d; border-radius: 5px; border: 2px solid var(--bg-app); }
+::-webkit-scrollbar-thumb:hover { background: #414850; }
 </style>
 </head>
 <body>
-<fieldset>
-  <legend>Connection</legend>
-  <div class="row">
-    <select id="ports" style="min-width:340px"></select>
-    <button id="refresh">↻</button>
-    <button id="connect">Connect</button>
-    <span id="fwbadge"></span>
-    <button id="fwOverride" style="display:none">Override gate (unsafe)</button>
-  </div>
-</fieldset>
 
-<fieldset>
-  <legend>Jog</legend>
-  <div class="row">
-    <label class="small">Speed (steps/s) <input id="speed" type="number" value="800" min="10" max="4000" step="10" /></label>
-    <button id="enable" disabled>Enable motors</button>
-    <button id="gamepad" disabled>🎮 Gamepad: off</button>
-    <span id="gamepadName" class="small"></span>
-  </div>
-  <div id="axes"></div>
-</fieldset>
+<div class="appbar">
+  <span class="brand">GRAFFIK<b>NG</b></span>
+  <span class="sep"></span>
+  <select id="ports" style="min-width:250px"></select>
+  <button id="refresh" class="icon" title="Rescan ports">⟳</button>
+  <button id="connect" class="primary">Connect</button>
+  <span id="fwchip" class="chip" style="display:none"></span>
+  <button id="fwOverride" style="display:none">Override gate</button>
+  <span class="grow"></span>
+  <button id="estop">STOP ALL</button>
+</div>
 
-<fieldset>
-  <legend>Timeline — key-frame move</legend>
-  <div class="row">
-    <input id="moveName" type="text" value="Untitled Move" style="width:180px" />
-    <label class="small">Duration (s) <input id="tlDuration" type="number" value="30" min="2" max="600" /></label>
-    <label class="small">Cue (s) <input id="tlCue" type="number" value="5" min="0" max="120" /></label>
-    <button id="tlNew">New</button>
-    <button id="tlLoad">Load…</button>
-    <button id="tlSave">Save…</button>
-  </div>
-  <canvas id="timeline"></canvas>
-  <div class="hint">Drag playhead (top ruler) · drag keyframes to move · double-click a keyframe to delete · <b>⏺ Capture</b> adds a keyframe at the playhead from the rig's current position</div>
-  <div class="row">
-    <button id="capSlide" disabled class="c-slide">⏺ Slide</button>
-    <button id="capPan" disabled class="c-pan">⏺ Pan</button>
-    <button id="capTilt" disabled class="c-tilt">⏺ Tilt</button>
-    <span style="flex:1"></span>
-    <button id="tlUpload" disabled>⬆ Upload to NMX</button>
-    <button id="tlGotoStart" disabled>⏮ All to start</button>
-    <button id="tlRun" disabled>▶ Run pass</button>
-    <button id="tlStop" disabled>⏹ Stop</button>
-    <span id="tlPassCounter" class="small"></span>
-  </div>
-  <div class="row" id="kfInspector" style="display:none">
-    <span class="small" id="kfLabel"></span>
-    <label class="small">t (s) <input id="kfTime" type="number" step="0.1" /></label>
-    <label class="small">pos (steps) <input id="kfPos" type="number" step="10" /></label>
-    <button id="kfDelete">✕ Delete keyframe</button>
-    <span class="small">arrows nudge pos · ⇧ ×10 · ⌥←→ time · ⌘Z undo</span>
-  </div>
-  <progress id="tlProg" value="0" max="100"></progress>
-</fieldset>
+<div class="main">
+  <!-- ============ left rail ============ -->
+  <div class="rail">
 
-<fieldset>
-  <legend>2-point pass (classic engine)</legend>
-  <div class="row">
-    <button id="markStart" disabled>⬤ Mark START here</button>
-    <button id="markStop" disabled>⬤ Mark END here</button>
-    <label class="small">Duration (s) <input id="travel" type="number" value="30" min="1" max="600" /></label>
-    <button id="arm" disabled>Arm</button>
-    <button id="gotoStart" disabled>⏮ All to start</button>
-    <button id="run" disabled>▶ Run pass</button>
-    <span id="passCounter" class="small"></span>
+    <section class="panel">
+      <header>Jog</header>
+      <div class="body">
+        <div class="row">
+          <span class="field"><label>Speed</label><input id="speed" class="num" type="number" value="800" min="10" max="4000" step="10" data-unit="st/s" /></span>
+          <span class="grow"></span>
+          <button id="gamepad" disabled title="Toggle gamepad jog">🎮</button>
+          <button id="gamepadCfg" class="icon" title="Gamepad settings">⚙</button>
+          <button id="enable" disabled>Enable</button>
+        </div>
+        <div id="axes"></div>
+        <div id="gamepadName" style="font-size:10px;color:var(--ink-faint);"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <header>Soft limits <span class="grow"></span><button id="limClearAll" class="clr" style="border:none;background:none">clear all</button></header>
+      <div class="body" title="Jog to each end of safe travel, then set. Blocks jog and upload beyond.">
+        <div id="limits"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <header>Move</header>
+      <div class="body">
+        <input id="moveName" type="text" value="Untitled Move" style="width:100%" />
+        <div class="row">
+          <span class="field"><label>Dur</label><input id="tlDuration" class="num" type="number" value="30" min="2" max="600" data-unit="s" /></span>
+          <span class="field"><label>Cue</label><input id="tlCue" class="num" type="number" value="5" min="0" max="120" data-unit="s" /></span>
+        </div>
+        <div class="row">
+          <button id="tlNew">New</button>
+          <button id="tlLoad">Open…</button>
+          <button id="tlSave">Save…</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <header>Selected key</header>
+      <div class="body" id="kfInspector">
+        <div style="font-size:10.5px;color:var(--ink-faint)" id="kfEmpty">No keyframe selected</div>
+        <div id="kfFields" style="display:none;flex-direction:column;gap:6px">
+          <div id="kfLabel" style="font-size:11px;color:var(--ink-dim)"></div>
+          <div class="row">
+            <span class="field"><label>Time</label><input id="kfTime" class="num" type="number" step="0.1" data-unit="s" /></span>
+            <span class="field"><label>Pos</label><input id="kfPos" class="num" type="number" step="10" data-unit="steps" /></span>
+          </div>
+          <button id="kfDelete">Delete key</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <header>Camera</header>
+      <div class="body">
+        <div class="row">
+          <span class="field"><label>Shutter</label><input id="camTrigger" class="num" type="number" value="120" min="1" max="60000" data-unit="ms" /></span>
+        </div>
+        <div class="row">
+          <span class="field"><label>Focus</label><input id="camFocus" class="num" type="number" value="0" min="0" max="5000" data-unit="ms" /></span>
+          <span class="field"><label>Delay</label><input id="camDelay" class="num" type="number" value="0" min="0" max="5000" data-unit="ms" /></span>
+        </div>
+        <div class="row">
+          <button id="camArm" disabled>Arm</button>
+          <button id="camFire" disabled>Test fire</button>
+          <button id="camOff" disabled>Off</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" style="flex:1">
+      <header>Pass log</header>
+      <div class="body"><div id="passlog"></div></div>
+    </section>
   </div>
-  <progress id="prog" value="0" max="100"></progress>
-</fieldset>
 
-<fieldset>
-  <legend>Camera (shutter via NMX)</legend>
-  <div class="row">
-    <label class="small">Trigger (ms) <input id="camTrigger" type="number" value="120" min="1" max="60000" /></label>
-    <label class="small">Focus (ms) <input id="camFocus" type="number" value="0" min="0" max="5000" /></label>
-    <label class="small">Delay (ms) <input id="camDelay" type="number" value="0" min="0" max="5000" /></label>
-    <button id="camArm" disabled>Arm camera</button>
-    <button id="camFire" disabled>📷 Test fire</button>
-    <button id="camOff" disabled>Disable</button>
-    <span id="camStatus" class="small"></span>
+  <!-- ============ stage ============ -->
+  <div class="stage">
+    <section class="panel" style="flex:1;min-height:0">
+      <header>
+        Timeline — key-frame move
+        <span class="grow"></span>
+        <span id="zoomLabel" style="font-family:var(--mono);letter-spacing:0;text-transform:none">100%</span>
+        <button id="tlFrame" class="icon" title="Frame all (F)">⤢</button>
+      </header>
+
+      <div class="tl-head">
+        <button id="capSlide" disabled>⏺ Slide</button>
+        <button id="capPan" disabled>⏺ Pan</button>
+        <button id="capTilt" disabled>⏺ Tilt</button>
+        <span class="grow"></span>
+        <span id="playheadLabel" class="chip">0.0 s</span>
+      </div>
+
+      <canvas id="timeline"></canvas>
+
+      <div class="hint">
+        <kbd>drag</kbd> ruler scrubs · <kbd>drag</kbd> key moves · <kbd>dbl-click</kbd> deletes · <kbd>scroll</kbd> zoom · <kbd>⇧scroll</kbd> pan · <kbd>F</kbd> frame · <kbd>⌘Z</kbd> undo
+      </div>
+
+      <div class="tl-foot">
+        <button id="tlUpload" disabled class="primary">↑ Upload</button>
+        <button id="tlGotoStart" disabled>⏮</button>
+        <button id="tlRun" disabled>▶ Run pass</button>
+        <button id="tlStop" disabled>■</button>
+        <div class="meter"><i id="tlProg"></i></div>
+        <span id="tlPassCounter" class="chip">pass 0</span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <header>2-point pass · classic engine</header>
+      <div class="body">
+        <div class="row">
+          <button id="markStart" disabled>⏺ Mark START</button>
+          <button id="markStop" disabled>⏺ Mark END</button>
+          <span class="field"><label>Dur</label><input id="travel" class="num" type="number" value="30" min="1" max="600" data-unit="s" /></span>
+          <button id="arm" disabled>Arm</button>
+          <button id="gotoStart" disabled>⏮</button>
+          <button id="run" disabled>▶ Run</button>
+          <div class="meter"><i id="prog"></i></div>
+          <span id="passCounter" class="chip">pass 0</span>
+        </div>
+      </div>
+    </section>
   </div>
-</fieldset>
+</div>
 
-<fieldset>
-  <legend>Pass log</legend>
-  <div id="passlog"></div>
-</fieldset>
+<div class="statusbar">
+  <span class="dot" id="connDot"></span>
+  <span id="status">Not connected.</span>
+  <span class="chip" id="modeChip">key-frame engine</span>
+  <button id="helpBtn" class="icon" title="Keyboard shortcuts (?)">?</button>
+</div>
 
-<button id="estop">STOP ALL</button>
-<div id="status"></div>
-<div id="countdown"></div>
+<div id="countdown"><div class="n">5</div><div class="lbl">standby</div></div>
+
+<!-- ============ gamepad settings ============ -->
+<div class="modal" id="padModal">
+  <div class="sheet">
+    <header>Gamepad · bindings &amp; ballistics <button class="close icon" data-close>✕</button></header>
+    <div class="body">
+      <div id="padStatus" style="font-size:11px;color:var(--ink-faint)">No controller detected — connect one and press any button.</div>
+
+      <div class="sect">Axis bindings</div>
+      <div class="bindrow" style="color:var(--ink-faint);font-size:10px">
+        <span>Axis</span><span>Control</span><span>Invert</span><span></span>
+      </div>
+      <div id="binds"></div>
+
+      <div class="sect">Ballistics</div>
+      <div class="row">
+        <span class="field"><label>Deadzone</label><input id="padDead" class="num" type="number" value="15" min="0" max="40" step="1" /></span>
+        <span style="font-size:10px;color:var(--ink-faint)">% of stick travel ignored at centre</span>
+      </div>
+      <div class="row">
+        <span class="field"><label>Curve</label><input id="padCurve" class="num" type="number" value="2" min="1" max="4" step="0.1" /></span>
+        <span id="padCurveDesc" style="font-size:10px;color:var(--ink-faint)"></span>
+      </div>
+      <div class="row">
+        <span class="field"><label>Max speed</label><input id="padMax" class="num" type="number" value="100" min="10" max="100" step="5" /></span>
+        <span style="font-size:10px;color:var(--ink-faint)">% of the jog-speed field at full deflection</span>
+      </div>
+
+      <div class="sect">Live response</div>
+      <canvas id="padViz" style="width:100%;height:110px;background:var(--bg-canvas);border:1px solid var(--line);border-radius:4px"></canvas>
+      <div style="font-size:10px;color:var(--ink-faint)">Curve maps stick deflection → motor speed. Dots show live stick positions.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ shortcuts ============ -->
+<div class="modal" id="helpModal">
+  <div class="sheet">
+    <header>Keyboard &amp; pointer <button class="close icon" data-close>✕</button></header>
+    <div class="body">
+      <div class="sect">Timeline</div>
+      <div class="kbdrow"><span>drag ruler</span><span>scrub playhead</span></div>
+      <div class="kbdrow"><span>drag key</span><span>move keyframe (time + position)</span></div>
+      <div class="kbdrow"><span>double-click key</span><span>delete keyframe</span></div>
+      <div class="kbdrow"><span>scroll</span><span>zoom about cursor</span></div>
+      <div class="kbdrow"><span>⇧ scroll / middle-drag</span><span>pan</span></div>
+      <div class="kbdrow"><span>F · Home</span><span>frame all</span></div>
+      <div class="sect">Selected keyframe</div>
+      <div class="kbdrow"><span>↑ ↓</span><span>nudge position ±10 steps</span></div>
+      <div class="kbdrow"><span>⇧ ↑ ↓</span><span>nudge position ±100 steps</span></div>
+      <div class="kbdrow"><span>⌥ ← →</span><span>nudge time ±100 ms</span></div>
+      <div class="kbdrow"><span>⌫ Delete</span><span>delete keyframe</span></div>
+      <div class="sect">Numeric fields</div>
+      <div class="kbdrow"><span>drag sideways</span><span>scrub the value</span></div>
+      <div class="kbdrow"><span>⇧ drag</span><span>fine (×0.1)</span></div>
+      <div class="kbdrow"><span>⌘ drag</span><span>coarse (×10)</span></div>
+      <div class="sect">Global</div>
+      <div class="kbdrow"><span>Space</span><span>run pass</span></div>
+      <div class="kbdrow"><span>⌘Z · ⇧⌘Z</span><span>undo · redo</span></div>
+      <div class="kbdrow"><span>?</span><span>this panel</span></div>
+      <div class="kbdrow"><span>Esc</span><span>close · cancel countdown</span></div>
+    </div>
+  </div>
+</div>
 
 <script src="renderer.js"></script>
 </body>

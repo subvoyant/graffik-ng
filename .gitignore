@@ -3,4 +3,5 @@ dist/
 release/
 *.tar.gz
 .DS_Store
+package-lock.json
 *.log

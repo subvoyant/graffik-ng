@@ -1,6 +1,6 @@
 # Digest: @graffik-ng/nmx-protocol
 
-**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-17 (v0.4) · 53 tests green · zero runtime deps · MIT
+**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-17 (v0.6) · 57 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
 
 ## packet.ts — codec
 
@@ -40,6 +40,12 @@ Namespaces returning `Packet`: `general` (sub 0), `motors` (1–3, `Motor = 1|2|
 
 - `Film` schema: `{format:"graffik-ng-move", version:1, name, durationMs, startDelayMs, engine:"classic"|"keyframe", axes:[{axis:0|1|2, points:[{time,position,velocity?}]}], savedAt?, notes?}`.
 - `serializeFilm`/`deserializeFilm`/`validateFilm` — strict, human-readable errors (they surface in UI); refuses future versions; times strictly increasing and within 0..durationMs; ≥2 points/axis. `newFilm(name?, durationMs?)` = blank 3-axis document. Omitted `velocity` = auto-solve at upload time.
+
+## limits.ts — soft travel limits (ADR-0013)
+
+- `AxisLimit {min|null, max|null}`, `Limits` = 3-tuple, `NO_LIMITS`. Untaught bounds never block.
+- `withinLimit` / `clampToLimit` / `isTaught`; **`jogWouldExceed(l,pos,stepsPerSec,lookaheadMs=250)`** projects forward and is direction-aware — motion *away* from a violated bound is always permitted so a rig parked outside limits stays recoverable.
+- `violationsForFilm(film, limits)` → `LimitViolation[]` (axis, keyIndex, position, bound, limit); `describeViolations()` renders the operator-facing sentence. Called before any upload packet is sent.
 
 ## Gotchas
 

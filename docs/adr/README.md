@@ -16,3 +16,5 @@ Immutable decision records. Accepted = in force. Supersede, never edit. See ADR-
 | [0009](0009-single-source-motion-math.md) | Timeline preview and firmware program share one solver | Accepted |
 | [0010](0010-film-file-format.md) | Versioned `.graffik` JSON move files, schema in core | Accepted |
 | [0011](0011-commit-lockfiles-npm-ci.md) | Commit lockfiles; CI installs with `npm ci` | Accepted |
+| [0012](0012-ui-design-system.md) | UI design system: 3D-app idiom, validated axis palette | Accepted |
+| [0013](0013-soft-limits-host-enforced.md) | Soft travel limits, enforced host-side | Accepted |
