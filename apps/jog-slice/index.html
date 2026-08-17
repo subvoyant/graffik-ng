@@ -493,6 +493,7 @@ input[type=text] { font-size: 11.5px; }
   <div class="sheet" style="width:600px">
     <header>Cue outputs &amp; trigger device <span class="grow"></span><button data-close>✕</button></header>
     <div class="body">
+      <header class="subhead">Trigger board — the only tier 2 path</header>
       <div class="row">
         <span class="field" style="flex:1;min-width:0"><label>Device</label><select id="cuePort" style="flex:1;min-width:0"></select></span>
         <button id="cuePortRefresh" class="icon" title="Rescan ports">⟳</button>
@@ -508,6 +509,29 @@ input[type=text] { font-size: 11.5px; }
         passes — fine for a cue light, not for anything the audience will see A/B'd in a composite.
         <b>Tier 2</b> uploads the whole cue list to the device, which runs it off its own clock from a
         single GO. Reference firmware: <b>firmware/graffik-trig/</b>.
+      </div>
+
+      <header class="subhead">DMX — Enttec DMX USB Pro</header>
+      <div class="row">
+        <span class="field" style="flex:1;min-width:0"><label>Port</label><select id="dmxPort" style="flex:1;min-width:0"></select></span>
+        <button id="dmxConnect">Connect</button>
+        <button id="dmxDisconnect" disabled>Disconnect</button>
+      </div>
+      <div class="row"><span id="dmxState" class="tcread">not connected</span></div>
+
+      <header class="subhead">OSC</header>
+      <div class="row">
+        <span class="field"><label>Host</label><input id="oscHost" type="text" value="127.0.0.1" spellcheck="false" style="width:120px" /></span>
+        <span class="field"><label>Port</label><input id="oscPort" class="num" type="number" min="1" max="65535" value="9000" /></span>
+        <span class="field"><label>Prefix</label><input id="oscPrefix" type="text" value="/graffik" spellcheck="false" style="width:84px" /></span>
+        <button id="oscConnect">Enable</button>
+        <button id="oscDisconnect" disabled>Off</button>
+      </div>
+      <div class="row"><span id="oscState" class="tcread">not enabled</span></div>
+      <div style="font-size:10.5px;color:var(--ink-faint)">
+        DMX and OSC are <b>tier 1</b> — the host times them, and nothing about that is
+        repeatable between passes. UDP also confirms nothing, so check the receiver by ear
+        or by eye before you rely on an OSC cue.
       </div>
 
       <header class="subhead">Target bindings</header>

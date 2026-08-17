@@ -9,13 +9,13 @@
 ```
 graffik-ng/
 ├── packages/nmx-protocol/     # headless core — ALL protocol knowledge (zero runtime deps)
-│   └── src/ packet · commands · client · spline · move · film · limits · timecode · export3d · trigger · simulator
-│   └── test/ 159 tests: byte-exact vs firmware samples + e2e vs simulator + timecode/DF + export
+│   └── src/ packet · commands · client · spline · move · film · limits · timecode · export3d · trigger · dmx · osc · simulator
+│   └── test/ 190 tests: byte-exact vs firmware samples + e2e vs simulator + timecode/DF + export
 ├── packages/nmx-cli/          # headless runner: ports/info/run/stop for .graffik files
 ├── apps/jog-slice/            # Electron app (main.js / preload.cjs / index.html / renderer.js)
 │                              # jog + configurable gamepad · timeline editor (zoom/undo/select/nudge)
 │                              # 2-point pass · keyframe pass · camera trigger · pass log + cue countdown
-│                              # soft limits · preferences · move files (new/open/save/as) · 3D export · fw gate
+│                              # soft limits · prefs · move files · 3D export · cue lane + triggers · fw gate
 │                              # `npm run dist` → unsigned .dmg (electron-builder)
 ├── firmware/graffik-trig/     # reference Arduino trigger firmware (GRAFFIK-TRIG v1, ADR-0016)
 ├── .github/workflows/ci.yml   # test matrix (ubuntu+macos, `npm ci`) + unsigned dmg artifact on main
@@ -50,8 +50,8 @@ Dataflow: renderer (vanilla JS UI) → `window.nmx` (preload contextBridge) → 
 
 | Digest | Covers | Verified against |
 |---|---|---|
-| [nmx-protocol.md](nmx-protocol.md) | packet codec, command vocabulary, client/transport, spline solver, move builder, timecode, film schema + events, 3D export, simulator | `packages/nmx-protocol/src/*` @ 2026-08-17 (v0.7.1) |
-| [jog-slice.md](jog-slice.md) | Electron app, IPC channel table, move files vs export, timecode UI, prefs, limit enforcement, gamepad ballistics, editor interactions, packaging | `apps/jog-slice/*` @ 2026-08-17 (v0.7.1) |
+| [nmx-protocol.md](nmx-protocol.md) | packet codec, command vocabulary, client/transport, spline solver, move builder, timecode, film schema + events, 3D export, cue backends (serial/DMX/OSC), simulator | `packages/nmx-protocol/src/*` @ 2026-08-17 (v0.9) |
+| [jog-slice.md](jog-slice.md) | Electron app, IPC channel table, move files vs export, timecode UI, prefs, limit enforcement, gamepad ballistics, editor interactions, packaging | `apps/jog-slice/*` @ 2026-08-17 (v0.9) |
 | [nmx-cli.md](nmx-cli.md) | headless runner commands + gaps | `packages/nmx-cli/cli.js` @ 2026-08-17 |
 | [../HARDWARE-BRINGUP.md](../HARDWARE-BRINGUP.md) | first-contact sequence, repeatability method, ADR-0006 shootout, safe-limits worksheet | written pre-hardware @ 2026-08-17 |
 | [reference-repos.md](reference-repos.md) | external ground truth: firmware, official apps, PDFs — where every fact lives | upstream clones @ 2026-08-15 |

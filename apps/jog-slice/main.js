@@ -8,6 +8,7 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import dgram from "node:dgram";
 import { SerialPort } from "serialport";
 import {
   NmxClient, SimulatedNmx, handshake,
@@ -17,6 +18,7 @@ import {
   filmAxesToMs, filmDurationMs, filmCueMs, msToFramesExact, framesToMs,
   EXPORT_FORMATS, DEFAULT_CALIBRATION, DEFAULT_LENS, moveExtents, alembicConverterScript,
   buildCueList, SimulatedTriggerBackend, SerialTriggerBackend, SimulatedTriggerDevice, CueScheduler,
+  DmxTriggerBackend, SimulatedEnttecDevice, OscTriggerBackend, SimulatedDatagram,
   NO_LIMITS, isTaught, jogWouldExceed, violationsForFilm, describeViolations,
 } from "@graffik-ng/nmx-protocol";
 
@@ -46,9 +48,6 @@ const DEFAULT_PREFS = {
     maxSpeedPct: 100, // scales the jog-speed field at full deflection
   },
   recent: [],
-  /* 3D export settings (ADR-0015). Calibration is a property of the RIG, so it
-     belongs in preferences, not in the move file — the same move exported from
-     a re-belted rig needs the new numbers, not the old ones. */
   /* Logical target -> physical output (ADR-0016). Bindings are rig config, so
      they live here rather than in the move file — a .graffik must survive being
      carried to another rig. */
@@ -57,7 +56,14 @@ const DEFAULT_PREFS = {
       { target: "cue-light", backendId: "simulated", output: 1 },
     ],
     lastPort: null,
+    /* DMX and OSC are separate transports from the trigger board; each keeps
+       its own connection settings so one can be live without the other. */
+    dmxPort: null,
+    osc: { host: "127.0.0.1", port: 9000, prefix: "/graffik" },
   },
+  /* 3D export settings (ADR-0015). Calibration is a property of the RIG, so it
+     belongs in preferences, not in the move file — the same move exported from
+     a re-belted rig needs the new numbers, not the old ones. */
   export: {
     formatId: "usda",
     metersPerUnit: 1,
@@ -93,6 +99,7 @@ function loadPrefs() {
       triggers: {
         ...DEFAULT_PREFS.triggers, ...(raw.triggers ?? {}),
         bindings: Array.isArray(raw.triggers?.bindings) ? raw.triggers.bindings : [...DEFAULT_PREFS.triggers.bindings],
+        osc: { ...DEFAULT_PREFS.triggers.osc, ...(raw.triggers?.osc ?? {}) },
       },
       export: {
         ...DEFAULT_PREFS.export, ...(raw.export ?? {}),
@@ -524,6 +531,71 @@ async function closeTriggerPort() {
 }
 ipcMain.handle("nmx:trigger-disconnect", () => closeTriggerPort());
 
+/** Every trigger transport, closed. Called on quit. */
+async function closeAllTriggers() {
+  await closeTriggerPort();
+  await closeDmx();
+  await closeOsc();
+}
+
+/* ---- DMX (Enttec DMX USB Pro) ---- */
+
+/** @type {SerialPort | null} */ let dmxPort = null;
+
+async function closeDmx() {
+  const be = backends.get("dmx");
+  if (be) { try { await be.close(); } catch { /* going away */ } }
+  backends.delete("dmx");
+  if (dmxPort?.isOpen) await new Promise((r) => dmxPort.close(() => r()));
+  dmxPort = null;
+}
+
+ipcMain.handle("nmx:dmx-connect", async (_e, portPath) => {
+  await closeDmx();
+  let transport;
+  if (portPath === SIM_PORT) {
+    transport = new SimulatedEnttecDevice();
+  } else {
+    /* The Pro is an FTDI virtual COM port; per Enttec's API the baud rate is a
+       dummy value and does not set the DMX timing — the widget owns that. */
+    dmxPort = new SerialPort({ path: portPath, baudRate: 115200, autoOpen: false });
+    await new Promise((res, rej) => dmxPort.open((err) => (err ? rej(err) : res())));
+    transport = dmxPort;
+  }
+  const be = new DmxTriggerBackend(transport);
+  backends.set("dmx", be);
+  prefs.triggers.dmxPort = portPath; savePrefs();
+  return { id: be.id, tier: be.tier, outputs: be.outputs(), describe: be.describe() };
+});
+ipcMain.handle("nmx:dmx-disconnect", () => closeDmx());
+
+/* ---- OSC ---- */
+
+async function closeOsc() {
+  const be = backends.get("osc");
+  if (be) { try { await be.close(); } catch { /* going away */ } }
+  backends.delete("osc");
+}
+
+ipcMain.handle("nmx:osc-connect", async (_e, cfg) => {
+  await closeOsc();
+  const conf = { ...prefs.triggers.osc, ...(cfg ?? {}) };
+  /* A UDP socket that never binds still sends; there is nothing to fail here,
+     which is exactly why OSC needs the receiver checked by hand. */
+  const sock = conf.host === "simulated" ? new SimulatedDatagram() : dgram.createSocket("udp4");
+  const be = new OscTriggerBackend(
+    conf.host === "simulated" ? sock : {
+      send: (data, port, host, cb) => sock.send(Buffer.from(data), port, host, cb),
+      close: () => sock.close(),
+    },
+    { host: conf.host, port: conf.port, addressPrefix: conf.prefix },
+  );
+  backends.set("osc", be);
+  prefs.triggers.osc = conf; savePrefs();
+  return { id: be.id, tier: be.tier, outputs: be.outputs(), describe: be.describe() };
+});
+ipcMain.handle("nmx:osc-disconnect", () => closeOsc());
+
 ipcMain.handle("nmx:get-bindings", () => prefs.triggers.bindings);
 ipcMain.handle("nmx:set-bindings", (_e, bindings) => {
   prefs.triggers.bindings = Array.isArray(bindings) ? bindings : [];
@@ -584,7 +656,20 @@ function stopCues() {
   clearInterval(passClock); passClock = null;
   scheduler?.stop();
 }
-ipcMain.handle("nmx:cues-stop", async () => { stopCues(); return scheduler?.worstJitterMs() ?? 0; });
+/**
+ * Stop dispatch and report what Tier 1 actually delivered. The measured number
+ * is the whole point: "±20 ms and not repeatable" is a claim until a pass hands
+ * back its own worst case (ADR-0016).
+ */
+ipcMain.handle("nmx:cues-stop", async () => {
+  stopCues();
+  if (!scheduler) return { fired: 0, worstJitterMs: 0, dispatched: [] };
+  return {
+    fired: scheduler.dispatched.length,
+    worstJitterMs: scheduler.worstJitterMs(),
+    dispatched: scheduler.dispatched.map((d) => ({ id: d.id, target: d.target, atMs: d.atMs, firedAtMs: d.firedAtMs })),
+  };
+});
 
 ipcMain.handle("nmx:cue-test", async (_e, target, action) => {
   const b = binding(target);
@@ -641,4 +726,10 @@ function createWindow() {
 
 loadPrefs();
 app.whenReady().then(createWindow);
-app.on("window-all-closed", async () => { await disconnect(); app.quit(); });
+app.on("window-all-closed", async () => {
+  /* Close the trigger transports too, and abort before closing: a board left
+     holding an armed cue list, or a DMX lamp left at full, is not "quit". */
+  await closeAllTriggers();
+  await disconnect();
+  app.quit();
+});

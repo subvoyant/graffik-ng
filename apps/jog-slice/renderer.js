@@ -122,8 +122,12 @@ if (!window.nmx) {
     cueCheck: async (f) => ({ total: (f.events ?? []).length, unroutable: [], tier: 1, device: null }),
     cuesArm: async (f) => ({ tier: 1, armed: (f.events ?? []).length, hostScheduled: (f.events ?? []).length }),
     cuesStart: async () => ({ running: true }),
-    cuesStop: async () => 0,
+    cuesStop: async () => ({ fired: 0, worstJitterMs: 0, dispatched: [] }),
     cueTest: async () => {},
+    dmxConnect: async () => ({ id: "dmx", tier: 1, outputs: 512, describe: "Enttec DMX USB Pro — 512 channels, tier 1 (host-timed)" }),
+    dmxDisconnect: async () => {},
+    oscConnect: async (c) => ({ id: "osc", tier: 1, outputs: 512, describe: `OSC → ${c?.host ?? "127.0.0.1"}:${c?.port ?? 9000}, tier 1 (host-timed)` }),
+    oscDisconnect: async () => {},
     onCueFired: () => {}, onCueProblem: () => {}, onTriggerInput: () => {},
   };
 }
@@ -961,17 +965,36 @@ $("cueTest").onclick = async () => {
   catch (e) { status("Test failed: " + e.message); }
 };
 
+/**
+ * What the cues actually delivered, logged after every pass.
+ *
+ * Tier 1's caveat is "±20 ms and not repeatable". Printing the pass's own worst
+ * case turns that from a claim into a number the operator can watch drift —
+ * and if it ever reads 80 ms on the take that mattered, they will know why the
+ * composite is off instead of guessing.
+ */
+async function reportCueDelivery() {
+  try {
+    const r = await window.nmx.cuesStop();
+    if (!r || !r.fired) return;
+    logPass(`${r.fired} cues fired · worst lateness ${r.worstJitterMs} ms (host-timed)`);
+    const late = (r.dispatched ?? []).filter((d) => d.firedAtMs - d.atMs > 40);
+    for (const d of late) logPass(`  late: ${d.id} → ${d.target} by ${d.firedAtMs - d.atMs} ms`);
+  } catch { /* nothing armed */ }
+}
+
 /* ---------------- trigger device + bindings ---------------- */
 
 let bindings = [];
+/** Every backend the app can route a cue to. `simulated` is always present. */
+const BACKEND_IDS = ["simulated", "serial", "dmx", "osc"];
 
 function renderBindings() {
   $("cueBindings").innerHTML = bindings.map((b, i) => `
     <div class="bind">
       <input data-bt="${i}" type="text" value="${b.target}" spellcheck="false" />
       <select data-bb="${i}">
-        <option value="simulated"${b.backendId === "simulated" ? " selected" : ""}>simulated</option>
-        <option value="serial"${b.backendId === "serial" ? " selected" : ""}>serial</option>
+        ${BACKEND_IDS.map((id) => `<option value="${id}"${b.backendId === id ? " selected" : ""}>${id}</option>`).join("")}
       </select>
       <input data-bo="${i}" type="number" min="1" max="512" value="${b.output}" class="num" style="width:56px" />
       <button data-btest="${i}" title="Fire this output now">▶</button>
@@ -1008,7 +1031,9 @@ function setTier(tier, deviceLabel) {
 
 async function refreshCuePorts() {
   const ports = await window.nmx.listPorts();
-  $("cuePort").innerHTML = ports.map((p) => `<option value="${p.path}">${p.path}${p.manufacturer ? " — " + p.manufacturer : ""}</option>`).join("");
+  const opts = ports.map((p) => `<option value="${p.path}">${p.path}${p.manufacturer ? " — " + p.manufacturer : ""}</option>`).join("");
+  $("cuePort").innerHTML = opts;
+  $("dmxPort").innerHTML = opts;
 }
 $("cuePortRefresh").onclick = refreshCuePorts;
 $("cueCfg").onclick = async () => { await refreshCuePorts(); renderBindings(); $("cueModal").classList.add("open"); };
@@ -1019,6 +1044,37 @@ $("cueConnect").onclick = async () => {
     status(`Trigger device connected: ${info.name} (tier ${info.tier}).`);
   } catch (e) { status("Trigger connect failed: " + e.message); }
 };
+$("dmxConnect").onclick = async () => {
+  try {
+    const info = await window.nmx.dmxConnect($("dmxPort").value);
+    $("dmxState").textContent = info.describe;
+    $("dmxDisconnect").disabled = false;
+    status("DMX connected — tier 1, host-timed.");
+  } catch (e) { status("DMX connect failed: " + e.message); }
+};
+$("dmxDisconnect").onclick = async () => {
+  await window.nmx.dmxDisconnect();
+  $("dmxState").textContent = "not connected";
+  $("dmxDisconnect").disabled = true;
+  status("DMX disconnected — the universe was blacked out on the way.");
+};
+
+$("oscConnect").onclick = async () => {
+  try {
+    const cfg = { host: $("oscHost").value.trim(), port: Number($("oscPort").value), prefix: $("oscPrefix").value.trim() || "/graffik" };
+    const info = await window.nmx.oscConnect(cfg);
+    $("oscState").textContent = info.describe + " — nothing confirms delivery, so check the receiver";
+    $("oscDisconnect").disabled = false;
+    status("OSC enabled.");
+  } catch (e) { status("OSC enable failed: " + e.message); }
+};
+$("oscDisconnect").onclick = async () => {
+  await window.nmx.oscDisconnect();
+  $("oscState").textContent = "not enabled";
+  $("oscDisconnect").disabled = true;
+  status("OSC off.");
+};
+
 $("cueDisconnect").onclick = async () => {
   await window.nmx.triggerDisconnect();
   setTier(1, null);
@@ -1280,6 +1336,7 @@ $("tlRun").onclick = async () => {
         $("tlProg").style.width = (p.percent ?? 0) + "%";
         if (p.state === 0 && (p.percent ?? 0) > 0) {
           clearInterval(pollTimer); logPass(`KF pass ${kfPassCount} complete`);
+          reportCueDelivery();
           status(`Pass ${kfPassCount} complete. ⏮ then reposition, run again.`);
         }
       } catch { clearInterval(pollTimer); }
@@ -1319,6 +1376,7 @@ $("run").onclick = async () => {
         $("prog").style.width = (p.percent ?? 0) + "%";
         if (!p.running && (p.percent ?? 0) > 0) {
           clearInterval(pollTimer); logPass(`classic pass ${passCount} complete`); status(`Pass ${passCount} complete.`);
+          reportCueDelivery();
         }
       } catch { clearInterval(pollTimer); }
     }, 500);

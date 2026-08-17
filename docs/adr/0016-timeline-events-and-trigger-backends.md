@@ -1,6 +1,6 @@
 # ADR-0016: Timeline events, and where they are scheduled
 
-**Status:** Accepted (schema, scheduler, simulated + serial backends, reference firmware and UI all landed v0.8; DMX/OSC/MIDI still staged)
+**Status:** Accepted (schema, scheduler, simulated + serial + DMX + OSC backends, reference firmware and UI all landed by v0.9; MIDI still deferred)
 **Date:** 2026-08-17
 **Deciders:** Project owner + Claude
 
@@ -84,10 +84,36 @@ Backend survey, ordered by what it costs us:
 | OSC | UDP | none (`node:dgram`) | 1 |
 | MIDI | — | **yes** — a native module | 1 |
 
-Three of the five need nothing we do not already ship. MIDI is the odd one out:
-every Node MIDI binding is native, and Web MIDI would put hardware I/O in the
-renderer, which ADR-0007 forbids. MIDI therefore waits until there is a real
-need, and arrives as an optional dependency rather than a core one.
+Three of the five need nothing we do not already ship, and all three are now
+built. MIDI is the odd one out: every Node MIDI binding is native, and Web MIDI
+would put hardware I/O in the renderer, which ADR-0007 forbids. MIDI therefore
+waits until there is a real need, and arrives as an optional dependency rather
+than a core one.
+
+**DMX specifics (v0.9).** The Enttec DMX USB Pro presents as an FTDI virtual COM
+port, so it rides the existing `serialport` dependency and the same `PortLike`
+seam as everything else. Frames are `0x7E | label | lenLSB | lenMSB | data |
+0xE7`; label 6 is "Output Only Send DMX Packet Request" and its data begins with
+the DMX start code. Two things about that framing are worth stating because they
+are easy to get wrong: the **length field is little-endian** (the one such field
+in this codebase — the NMX is big-endian throughout, and the two must not bleed
+together), and the widget **rejects a universe shorter than 24 channels**, so a
+short universe is padded rather than truncated. Per Enttec's API the host baud
+rate is a dummy value: the widget owns DMX timing.
+
+DMX is also **state, not events** — a channel holds its value until something
+changes it. So a `pulse` has to schedule its own release, nothing else will, and
+`abort()` blacks the universe out. A cue system that leaves a lamp at full after
+an e-stop has not really stopped.
+
+**OSC specifics (v0.9).** Encoded here rather than taken as a dependency, over
+`node:dgram`. The trap the encoder exists to avoid: an OSC-string is
+null-terminated **and then padded to a multiple of 4, with always at least one
+null** — so a 4-character string occupies 8 bytes, and the type-tag string pads
+by the same rule. Numbers are big-endian. Plain JS numbers are ambiguous, so the
+rule is stated rather than guessed: integers encode `i`, everything else `f`,
+and `{int:…}` / `{float:…}` force it, because some receivers silently ignore the
+wrong type. UDP confirms nothing, which the dialog says out loud.
 
 ### 5. The device protocol is plain text and versioned
 

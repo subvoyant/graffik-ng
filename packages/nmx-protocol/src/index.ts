@@ -9,3 +9,5 @@ export * from "./film.js";
 export * from "./limits.js";
 export * from "./export3d.js";
 export * from "./trigger.js";
+export * from "./dmx.js";
+export * from "./osc.js";

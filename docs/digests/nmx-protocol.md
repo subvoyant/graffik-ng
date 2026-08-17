@@ -1,6 +1,6 @@
 # Digest: @graffik-ng/nmx-protocol
 
-**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-17 (v0.8) · 159 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
+**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-17 (v0.9) · 190 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
 
 ## packet.ts — codec
 
@@ -84,6 +84,23 @@ Namespaces returning `Packet`: `general` (sub 0), `motors` (1–3, `Motor = 1|2|
 - `CueScheduler` (Tier 1) takes **injected time** (`advanceTo(elapsedMs)`), so it is deterministic under test and timer-driven in the app. It **fires late cues rather than dropping them** (a missed cue light is invisible; a late one is explicable), survives one cue throwing, and exposes `worstJitterMs()` — the Tier-1 caveat as a measured number. `unroutable()` reports undeliverable cues **before** the pass.
 - `actionToWire` covers `pulse`/`level`/`dmx`; `camera`/`midi`/`osc` return null and are skipped rather than sent as garbage. Levels are clamped to 0–255.
 - ASCII encode/decode is hand-rolled — the core has zero deps and must typecheck without Node or DOM lib types, so no `Buffer`, no `TextEncoder`.
+
+## dmx.ts — DMX512 via Enttec DMX USB Pro (ADR-0016)
+
+- Frame: `0x7E | label | lenLSB | lenMSB | data | 0xE7`. **The length is LITTLE-endian** — the only such field in this codebase. The NMX is big-endian throughout; do not let the two bleed together.
+- Label **6** = Output Only Send DMX Packet Request; its data starts with the **DMX start code** (0), so `dmxPayload` puts channel N at `payload[N]` and the caller has no off-by-one to get wrong. The widget rejects <24 channels, so a short universe is **padded, never truncated**.
+- Per Enttec's API the host baud rate is a **dummy value** — the widget owns DMX timing. The app opens 115200 for form's sake.
+- `DmxUniverse` is **state, not events**: a channel holds until changed. Consequences that fall out of that and are easy to miss: a `pulse` **schedules its own release** (nothing else will), and `abort()` **blacks out** — a cue system that leaves a lamp at full after an e-stop has not stopped.
+- Frames are coalesced to the widget's 40 Hz ceiling. **One injected clock** (`nowFn` + `setTimeoutFn` from the same source). An earlier draft had a private counter advanced by `tick()` *alongside* injected timers; nothing called `tick()` in the app, so the rate limiter believed no time had passed and deferred every frame after the first. If you add timing here, inject it — do not grow a second clock.
+- `SimulatedEnttecDevice` parses frames back out (reassembles split writes, tolerates leading garbage) so the whole path is testable with no rig.
+- **Tier 1** and cannot be otherwise: DMX has no scheduled-cue concept.
+
+## osc.ts — OSC 1.0 (ADR-0016)
+
+- Encoded here rather than taken as a dependency; transport is `node:dgram` behind a `DatagramLike` seam.
+- **The padding rule is the whole reason `oscString` is a named, tested function:** an OSC-string is null-terminated *and then* padded to a multiple of 4, **always with at least one null** — so `"data"` occupies 8 bytes, not 4, and the type-tag string pads by the same rule. That off-by-one is the classic OSC bug.
+- Numbers are **big-endian** (`440.0` → `43 dc 00 00`, matching the spec's own example). Plain JS numbers are ambiguous, so the rule is stated: integers → `i`, everything else → `f`; `{int:…}`/`{float:…}` force it, because some receivers silently ignore the wrong type.
+- An `osc` action carries its own address; generic `level`/`pulse` publish to `<prefix>/<target>`. `abort()` sends `<prefix>/abort` — best effort, because **UDP confirms nothing**.
 
 ## Gotchas
 
