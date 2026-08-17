@@ -15,3 +15,4 @@ Immutable decision records. Accepted = in force. Supersede, never edit. See ADR-
 | [0008](0008-dependency-hygiene-electron-xprotect.md) | Dependency hygiene: current Electron, allowScripts, XProtect | Accepted |
 | [0009](0009-single-source-motion-math.md) | Timeline preview and firmware program share one solver | Accepted |
 | [0010](0010-film-file-format.md) | Versioned `.graffik` JSON move files, schema in core | Accepted |
+| [0011](0011-commit-lockfiles-npm-ci.md) | Commit lockfiles; CI installs with `npm ci` | Accepted |
