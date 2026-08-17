@@ -18,3 +18,6 @@ Immutable decision records. Accepted = in force. Supersede, never edit. See ADR-
 | [0011](0011-commit-lockfiles-npm-ci.md) | Commit lockfiles; CI installs with `npm ci` | Accepted |
 | [0012](0012-ui-design-system.md) | UI design system: 3D-app idiom, validated axis palette | Accepted |
 | [0013](0013-soft-limits-host-enforced.md) | Soft travel limits, enforced host-side | Accepted |
+| [0014](0014-timecode-and-timebase.md) | Frames are the authoring unit; SMPTE timecode is the display | Accepted |
+| [0015](0015-3d-export-usd-and-chan.md) | 3D camera export via OpenUSD + `.chan`, not Alembic | Accepted (calibration pending hardware) |
+| [0016](0016-timeline-events-and-trigger-backends.md) | Timeline events; host- vs device-scheduled tiers | Accepted (backends staged) |

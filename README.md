@@ -8,11 +8,10 @@ motion controller — built for live-action, repeatable, multi-pass camera moves
 (motion-control "multiplicity", where one performer appears several times in a
 composited shot because the camera repeats its move exactly).
 
-![Graffik NG — jog controls, taught soft travel limits, three-track key-frame timeline with solved motion curves, keyframe inspector, pass controls, and camera trigger](docs/images/graffik-ng-app.png)
+![Graffik NG running on macOS — jog panel, soft travel limits, three-track key-frame timeline, pass controls, camera trigger, and the STOP ALL e-stop](docs/images/graffik-ng-app.png)
 
-<sub>Key-frame move across slide / pan / tilt. Red bands are the taught soft
-travel limits; the curves are solved by the same code that uploads to the
-controller, so what you see is what the rig executes.</sub>
+<sub>Graffik NG on macOS, a fresh document before anything is taught or
+keyed.</sub>
 
 ## What it does
 
@@ -41,11 +40,21 @@ controller, so what you see is what the rig executes.</sub>
 - **Big red STOP ALL**, wired to broadcast stop for both engines and jumping the
   command queue.
 
+## The editor
+
+![Three-track key-frame timeline with solved motion curves, the selected-key inspector, and taught soft travel limits shaded on each track](docs/images/graffik-ng-timeline.png)
+
+<sub>A key-frame move across slide / pan / tilt. Diamonds are keyframes; the
+curves between them are sampled from the same cubic-Hermite solver that programs
+the controller, so what you see is what the rig executes. The red bands are the
+taught soft travel limits — the timeline scales to keep them in view, so the
+headroom between the move and the end of the rail is always visible.</sub>
+
 ## Status
 
 Working software, **not yet exercised against physical hardware.** Every layer is
 verified against the firmware's own published protocol documents, sample packets,
-and dispatch source, plus 53 automated tests and an end-to-end simulator — but
+and dispatch source, plus 57 automated tests and an end-to-end simulator — but
 first contact with a real NMX hasn't happened yet. Treat the first session with
 motors accordingly: low speeds, nothing precious mounted, hand near STOP ALL.
 
@@ -75,7 +84,7 @@ node cli.js run my-move.graffik --port /dev/tty.usbserial-XXXX --passes 5
   command vocabulary (general / motors / camera / key-frame engine / broadcasts),
   a queued request-response client with an e-stop fast path, the Hermite spline
   solver, the `.graffik` schema, and the NMX simulator. **Zero runtime
-  dependencies**; 53 tests, byte-exact against the firmware's own sample packets.
+  dependencies**; 57 tests, byte-exact against the firmware's own sample packets.
 - **`packages/nmx-cli`** — headless runner: list ports, query firmware, run saved
   moves with cue countdowns and progress, e-stop.
 - **`apps/jog-slice`** — the Electron app pictured above. All serial I/O lives in

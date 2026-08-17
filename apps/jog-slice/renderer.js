@@ -9,6 +9,52 @@ const $ = (id) => document.getElementById(id);
    Electron) installs a fake device so the UI can be designed/reviewed
    without hardware or a build. Never active under Electron.
    ------------------------------------------------------------------ */
+if (!window.tc) {
+  /* Minimal timecode bridge for the browser preview ONLY. Non-drop, integer
+     rates — enough to lay out and screenshot the UI. Under Electron the real,
+     tested core implementation is bridged in by preload (ADR-0014), and this
+     block is unreachable. Never extend it into a second implementation. */
+  const nominal = (tb) => Math.round(tb.num / tb.den);
+  const pad2 = (n) => String(n).padStart(2, "0");
+  window.tc = {
+    __preview: true,
+    TIMEBASES: [
+      { id: "23.976", label: "23.976", tb: { num: 24000, den: 1001, dropFrame: false } },
+      { id: "24", label: "24", tb: { num: 24, den: 1, dropFrame: false } },
+      { id: "25", label: "25", tb: { num: 25, den: 1, dropFrame: false } },
+      { id: "29.97ndf", label: "29.97 NDF", tb: { num: 30000, den: 1001, dropFrame: false } },
+      { id: "29.97df", label: "29.97 DF", tb: { num: 30000, den: 1001, dropFrame: true } },
+      { id: "30", label: "30", tb: { num: 30, den: 1, dropFrame: false } },
+      { id: "48", label: "48", tb: { num: 48, den: 1, dropFrame: false } },
+      { id: "50", label: "50", tb: { num: 50, den: 1, dropFrame: false } },
+      { id: "60", label: "60", tb: { num: 60, den: 1, dropFrame: false } },
+    ],
+    DEFAULT_TIMEBASE: { num: 24, den: 1, dropFrame: false },
+    timebaseById(id) { return this.TIMEBASES.find((t) => t.id === id)?.tb; },
+    timebaseId(tb) { return this.TIMEBASES.find((t) => t.tb.num === tb.num && t.tb.den === tb.den && t.tb.dropFrame === tb.dropFrame)?.id ?? ""; },
+    timebaseLabel(tb) { return this.TIMEBASES.find((t) => t.tb.num === tb.num && t.tb.den === tb.den && t.tb.dropFrame === tb.dropFrame)?.label ?? String(tb.num / tb.den); },
+    nominalRate: nominal,
+    fpsDecimal: (tb) => tb.num / tb.den,
+    framesToTimecode(f, tb) {
+      const r = nominal(tb), n = Math.abs(Math.round(f)), sep = tb.dropFrame ? ";" : ":";
+      const ff = n % r, ts = Math.floor(n / r);
+      return `${f < 0 ? "-" : ""}${pad2(Math.floor(ts / 3600))}:${pad2(Math.floor(ts / 60) % 60)}:${pad2(ts % 60)}${sep}${pad2(ff)}`;
+    },
+    timecodeToFrames(str, tb) {
+      const parts = String(str).trim().split(/[:;]/).map(Number);
+      while (parts.length < 4) parts.unshift(0);
+      const r = nominal(tb);
+      return parts[0] * 3600 * r + parts[1] * 60 * r + parts[2] * r + parts[3];
+    },
+    framesToMsExact: (f, tb) => (f * 1000 * tb.den) / tb.num,
+    framesToMs(f, tb) { return Math.round(this.framesToMsExact(f, tb)); },
+    msToFramesExact: (ms, tb) => (ms * tb.num) / (1000 * tb.den),
+    msToFrames(ms, tb) { return Math.round(this.msToFramesExact(ms, tb)); },
+    formatDuration(f, tb) { return `${f}f \u00b7 ${this.framesToTimecode(f, tb)}`; },
+    retimeFrames(f, from, to) { return Math.round(this.msToFramesExact(this.framesToMsExact(f, from), to)); },
+  };
+}
+
 if (!window.nmx) {
   const pos = [0, 0, 0], speeds = [0, 0, 0];
   setInterval(() => { for (let i = 0; i < 3; i++) pos[i] = Math.round(pos[i] + speeds[i] * 0.05); }, 50);
@@ -24,24 +70,42 @@ if (!window.nmx) {
     setStartHere: async () => {}, setStopHere: async () => {}, armMove: async () => {},
     gotoStart: async () => {}, run: async () => { pct = 0; }, pause: async () => {},
     progress: async () => ({ percent: (pct = Math.min(100, pct + 20)), running: pct < 100 }),
-    previewMove: async (axes, dur, n = 140) => axes.map(({ axis, points }) => {
+    previewMove: async (f, n = 140) => f.axes.map(({ axis, points }) => {
       const s = [];
       for (let i = 0; i <= n; i++) {
-        const t = (dur * i) / n;
+        const fr = (f.durationFrames * i) / n;
         let seg = 0;
-        for (let k = 0; k < points.length - 1; k++) if (t >= points[k].time) seg = k;
+        for (let k = 0; k < points.length - 1; k++) if (fr >= points[k].frame) seg = k;
         const a = points[seg], b = points[seg + 1] ?? a;
-        const u = b.time === a.time ? 0 : (t - a.time) / (b.time - a.time);
+        const u = b.frame === a.frame ? 0 : (fr - a.frame) / (b.frame - a.frame);
         const e = u * u * (3 - 2 * u);
-        s.push({ t, pos: a.position + (b.position - a.position) * e });
+        s.push({ frame: fr, pos: a.position + (b.position - a.position) * e });
       }
       return { axis, samples: s };
     }),
-    uploadKf: async (a) => a.length * 8, kfRun: async () => { pct = 0; }, kfStop: async () => {},
+    uploadKf: async (f) => f.axes.length * 8,
+    cueMs: async (f) => Math.round((f.cueFrames * 1000 * f.timebase.den) / f.timebase.num), kfRun: async () => { pct = 0; }, kfStop: async () => {},
     kfProgress: async () => ({ state: pct < 100 ? 1 : 0, percent: (pct = Math.min(100, pct + 20)) }),
     gotoKfStart: async () => {},
     camArm: async () => {}, camFire: async () => {}, camDisable: async () => {},
     saveFilm: async () => null, loadFilm: async () => null, stopAll: async () => { speeds.fill(0); },
+    exportFormats: async () => [
+      { id: "usda", label: "OpenUSD (.usda)", ext: "usda", note: "Cinema 4D, Blender, Houdini, Maya, Unreal. Carries its own units and up-axis." },
+      { id: "abc", label: "Alembic + FBX (via Blender)", ext: "usda", note: "Writes the .usda plus a Blender script that converts it." },
+      { id: "ae", label: "After Effects keyframe data (.txt)", ext: "txt", note: "Paste onto a camera layer. AE has no real-world units." },
+      { id: "nk", label: "Nuke camera (.nk)", ext: "nk", note: "Paste into a Nuke script. Carries its own rotation order." },
+      { id: "chan", label: "Channel file (.chan)", ext: "chan", note: "Nuke, 3DEqualizer, Syntheyes, Blender. No metadata at all." },
+      { id: "csv", label: "Data table (.csv)", ext: "csv", note: "One row per frame in steps, mm, degrees and scene units." },
+    ],
+    exportMove: async () => null,
+    moveExtents: async (f, cal) => {
+      const c = { slideStepsPerMm: 100, panStepsPerDeg: 100, tiltStepsPerDeg: 100, ...cal };
+      const span = (i, per) => {
+        const v = f.axes[i].points.map((p) => p.position / per);
+        return { min: Math.min(...v), max: Math.max(...v), range: Math.max(...v) - Math.min(...v) };
+      };
+      return { slideMm: span(0, c.slideStepsPerMm), panDeg: span(1, c.panStepsPerDeg), tiltDeg: span(2, c.tiltStepsPerDeg) };
+    },
     getPrefs: async () => ({ jogSpeed: 800, limits: [{min:null,max:null},{min:null,max:null},{min:null,max:null}],
       gamepad: { bindings: { slide:{axisIndex:0,invert:false}, pan:{axisIndex:2,invert:false}, tilt:{axisIndex:3,invert:true} },
                  deadzone: 0.15, curve: 2, maxSpeedPct: 100 }, recent: [] }),
@@ -108,29 +172,58 @@ function makeScrubbable(input) {
 }
 document.querySelectorAll("input.num").forEach(makeScrubbable);
 
-/* ---------------- film model ---------------- */
-function defaultFilm(durationMs = 30000) {
+/* ---------------- film model (frames — ADR-0014) ----------------
+   Every time value in this file is a FRAME NUMBER. Milliseconds appear
+   only in main.js, at the protocol boundary. If you find yourself writing
+   `* 1000` here, you are about to introduce the bug this rule prevents. */
+const TC = window.tc;
+function defaultFilm(durationFrames, tb = film?.timebase ?? TC.DEFAULT_TIMEBASE) {
+  const dur = durationFrames ?? Math.round(TC.fpsDecimal(tb) * 10);
   return {
-    format: "graffik-ng-move", version: 1, name: "Untitled Move",
-    durationMs, startDelayMs: 5000, engine: "keyframe",
-    axes: AXES.map((a) => ({ axis: a.axis, points: [{ time: 0, position: 0 }, { time: durationMs, position: 0 }] })),
+    format: "graffik-ng-move", version: 2, name: "Untitled Move",
+    timebase: { ...tb },
+    durationFrames: dur,
+    cueFrames: Math.round(TC.fpsDecimal(tb) * 5),
+    startFrame: 0,
+    engine: "keyframe",
+    axes: AXES.map((a) => ({ axis: a.axis, points: [{ frame: 0, position: 0 }, { frame: dur, position: 0 }] })),
   };
 }
-let film = defaultFilm();
-let playheadMs = 0, previewCache = null, uploaded = false, selection = null;
-let view = { t0: 0, t1: 30000 };            // visible time window (zoom/pan)
+let film = defaultFilm(undefined, TC.DEFAULT_TIMEBASE);
+let playheadFrame = 0, previewCache = null, uploaded = false, selection = null;
+/** Path of the move on disk, or null if it has never been saved. Save writes
+    here without a dialog; Save As always asks. */
+let filePath = null, dirty = false;
+let view = { f0: 0, f1: film.durationFrames };   // visible frame window (zoom/pan)
+
+/** Timecode of a frame within the move, honouring the move's start timecode. */
+const tcOf = (frame) => TC.framesToTimecode(film.startFrame + Math.round(frame), film.timebase);
+/** Smallest meaningful keyframe gap: one frame. */
+const MIN_GAP = 1;
 
 /* ---------------- undo/redo ---------------- */
 const undoStack = [], redoStack = [];
 const clone = (f) => JSON.parse(JSON.stringify(f));
-function snapshot() { undoStack.push(clone(film)); if (undoStack.length > 60) undoStack.shift(); redoStack.length = 0; }
+function snapshot() {
+  undoStack.push(clone(film)); if (undoStack.length > 60) undoStack.shift(); redoStack.length = 0;
+  markDirty();
+}
 function undo() { if (!undoStack.length) return; redoStack.push(clone(film)); film = undoStack.pop(); afterFilmChange(); }
 function redo() { if (!redoStack.length) return; undoStack.push(clone(film)); film = redoStack.pop(); afterFilmChange(); }
 function afterFilmChange() { selection = null; updateInspector(); syncInputs(); refreshPreview(); }
 function syncInputs() {
   $("moveName").value = film.name;
-  $("tlDuration").value = String(Math.round(film.durationMs / 1000));
-  $("tlCue").value = String(Math.round(film.startDelayMs / 1000));
+  $("tlDuration").value = String(film.durationFrames);
+  $("tlCue").value = String(film.cueFrames);
+  $("tlStartTc").value = TC.framesToTimecode(film.startFrame, film.timebase);
+  $("tlTimebase").value = TC.timebaseId(film.timebase);
+  $("tlDurationTc").textContent = TC.framesToTimecode(film.durationFrames, film.timebase);
+  $("tlCueTc").textContent = TC.framesToTimecode(film.cueFrames, film.timebase);
+  $("rateChip").textContent = TC.timebaseLabel(film.timebase) + " fps";
+  updateFileLabel();
+  $("tbSummary").textContent =
+    `${TC.timebaseLabel(film.timebase)} fps · ${film.durationFrames} frames · ` +
+    `${(TC.framesToMsExact(film.durationFrames, film.timebase) / 1000).toFixed(3)} s`;
 }
 
 /* ---------------- connection ---------------- */
@@ -362,6 +455,7 @@ window.nmx.onLimitHit?.(({ motor, position }) => {
 document.querySelectorAll("[data-close]").forEach((b) => b.onclick = () => b.closest(".modal").classList.remove("open"));
 document.querySelectorAll(".modal").forEach((m) => m.addEventListener("pointerdown", (e) => { if (e.target === m) m.classList.remove("open"); }));
 $("helpBtn").onclick = () => $("helpModal").classList.add("open");
+$("tbCfg").onclick = () => { syncInputs(); $("tbModal").classList.add("open"); };
 
 /* ---------------- countdown ---------------- */
 function countdown(sec) {
@@ -383,8 +477,10 @@ const trackRect = (i) => {
   const h = (cv.clientHeight - RULER) / 3;
   return { x: PAD_L, y: RULER + i * h + 6, w: cv.clientWidth - PAD_L - PAD_R, h: h - 12 };
 };
-const tToX = (t, r) => r.x + ((t - view.t0) / (view.t1 - view.t0)) * r.w;
-const xToT = (x, r) => view.t0 + ((x - r.x) / r.w) * (view.t1 - view.t0);
+const fToX = (f, r) => r.x + ((f - view.f0) / (view.f1 - view.f0)) * r.w;
+const xToF = (x, r) => view.f0 + ((x - r.x) / r.w) * (view.f1 - view.f0);
+/** Pointer x to a WHOLE frame — the timeline snaps, always. */
+const xToFrame = (x, r) => Math.round(xToF(x, r));
 
 function axisScale(i) {
   const pts = film.axes[i].points, sm = previewCache?.[i]?.samples ?? [];
@@ -406,10 +502,19 @@ function axisScale(i) {
 const posToY = (p, r, s) => r.y + r.h - ((p - s.min) / (s.max - s.min)) * r.h;
 const yToPos = (y, r, s) => s.min + ((r.y + r.h - y) / r.h) * (s.max - s.min);
 
-function niceStep(spanMs, targetPx, widthPx) {
-  const perPx = spanMs / widthPx;
+/**
+ * Ruler tick spacing in FRAMES. The ladder is built from the shooting rate so
+ * ticks land on whole seconds — a ruler that ticks every 37 frames is useless
+ * to someone reading timecode.
+ */
+function niceStep(spanFrames, targetPx, widthPx) {
+  const r = TC.nominalRate(film.timebase);
+  const perPx = spanFrames / widthPx;
   const raw = perPx * targetPx;
-  const steps = [100, 250, 500, 1000, 2000, 5000, 10000, 15000, 30000, 60000, 120000, 300000, 600000];
+  const steps = [1, 2, 5, 10, r / 2, r, 2 * r, 5 * r, 10 * r, 15 * r, 30 * r, 60 * r, 300 * r, 600 * r]
+    .map((v) => Math.max(1, Math.round(v)))
+    .filter((v, i, a) => a.indexOf(v) === i)
+    .sort((a, b) => a - b);
   return steps.find((s) => s >= raw) ?? steps[steps.length - 1];
 }
 
@@ -425,15 +530,19 @@ function render() {
   /* ruler */
   ctx.fillStyle = "#171a1d"; ctx.fillRect(0, 0, w, RULER);
   ctx.fillStyle = INK_FAINT; ctx.font = "10px ui-monospace, Menlo, monospace"; ctx.textBaseline = "middle";
-  const step = niceStep(view.t1 - view.t0, 70, rTop.w);
-  const first = Math.ceil(view.t0 / step) * step;
-  for (let t = first; t <= view.t1; t += step) {
-    const x = tToX(t, rTop);
+  const step = niceStep(view.f1 - view.f0, 78, rTop.w);
+  const first = Math.ceil(view.f0 / step) * step;
+  const rate = TC.nominalRate(film.timebase);
+  for (let fr = first; fr <= view.f1; fr += step) {
+    const x = fToX(fr, rTop);
     ctx.fillRect(x, RULER - 5, 1, 5);
-    const s = t / 1000;
-    const label = s >= 60
-      ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`
-      : `${+s.toFixed(step < 1000 ? 1 : 0)}s`;
+    /* Ruler ticks drop the hours field — MM:SS:FF, or SS:FF when zoomed in
+       past a second. The hour never changes across a camera move, so printing
+       it on every tick is three wasted characters that push the labels into
+       each other; the full timecode lives in the playhead chip. (Same
+       convention as Resolve's and Premiere's rulers.) */
+    const tc = tcOf(fr);
+    const label = step < rate ? tc.slice(6) : tc.slice(3);
     /* Drop the label rather than let the last tick render clipped at the edge. */
     if (x + 3 + ctx.measureText(label).width <= rTop.x + rTop.w) ctx.fillText(label, x + 3, RULER / 2 - 1);
     /* vertical grid down the tracks */
@@ -485,8 +594,8 @@ function render() {
       ctx.strokeStyle = a.color; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.beginPath();
       let started = false;
       for (const pt of sm) {
-        if (pt.t < view.t0 - 100 || pt.t > view.t1 + 100) continue;
-        const x = tToX(pt.t, r), y = posToY(pt.pos, r, s);
+        if (pt.frame < view.f0 - 2 || pt.frame > view.f1 + 2) continue;
+        const x = fToX(pt.frame, r), y = posToY(pt.pos, r, s);
         started ? ctx.lineTo(x, y) : (ctx.moveTo(x, y), started = true);
       }
       ctx.stroke(); ctx.restore(); ctx.lineWidth = 1;
@@ -494,8 +603,8 @@ function render() {
 
     /* keyframes as diamonds — the animation-software convention */
     film.axes[i].points.forEach((p, k) => {
-      if (p.time < view.t0 - 500 || p.time > view.t1 + 500) return;
-      const x = tToX(p.time, r), y = posToY(p.position, r, s);
+      if (p.frame < view.f0 - 8 || p.frame > view.f1 + 8) return;
+      const x = fToX(p.frame, r), y = posToY(p.position, r, s);
       const sel = selection && selection.track === i && selection.k === k;
       const R = sel ? 6 : 4.5;
       ctx.beginPath();
@@ -506,7 +615,7 @@ function render() {
   });
 
   /* playhead */
-  const px = tToX(playheadMs, rTop);
+  const px = fToX(playheadFrame, rTop);
   if (px >= PAD_L - 1 && px <= w - PAD_R + 1) {
     ctx.strokeStyle = "rgba(232,234,237,.55)"; ctx.beginPath();
     ctx.moveTo(px + .5, RULER); ctx.lineTo(px + .5, h); ctx.stroke();
@@ -514,8 +623,9 @@ function render() {
     ctx.moveTo(px - 5, RULER - 9); ctx.lineTo(px + 5, RULER - 9); ctx.lineTo(px, RULER - 1); ctx.closePath(); ctx.fill();
   }
 
-  $("playheadLabel").textContent = (playheadMs / 1000).toFixed(1) + " s";
-  $("zoomLabel").textContent = Math.round((film.durationMs / (view.t1 - view.t0)) * 100) + "%";
+  $("playheadLabel").textContent = tcOf(playheadFrame);
+  $("playheadFrameLabel").textContent = `${Math.round(playheadFrame)}f`;
+  $("zoomLabel").textContent = Math.round((film.durationFrames / (view.f1 - view.f0)) * 100) + "%";
 }
 
 let previewTimer = null;
@@ -523,36 +633,37 @@ function refreshPreview() {
   clearTimeout(previewTimer);
   previewTimer = setTimeout(async () => {
     try {
-      previewCache = await window.nmx.previewMove(
-        film.axes.map((a) => ({ axis: a.axis, points: a.points })), film.durationMs, 200);
+      previewCache = await window.nmx.previewMove(film, 200);
     } catch (e) { previewCache = null; status("Curve solve failed: " + e.message); }
     uploaded = false; render();
   }, 50);
 }
 
 /* ---------------- zoom / pan ---------------- */
-function frameAll() { view = { t0: 0, t1: film.durationMs }; render(); }
+function frameAll() { view = { f0: 0, f1: film.durationFrames }; render(); }
 $("tlFrame").onclick = frameAll;
 
 cv.addEventListener("wheel", (e) => {
   e.preventDefault();
   const r = { x: PAD_L, w: cv.clientWidth - PAD_L - PAD_R };
-  const span = view.t1 - view.t0;
+  const span = view.f1 - view.f0;
   if (e.shiftKey) {
     const d = (e.deltaY || e.deltaX) * span * 0.0015;
-    view.t0 += d; view.t1 += d;
+    view.f0 += d; view.f1 += d;
   } else {
     const rect = cv.getBoundingClientRect();
-    const anchor = xToT(e.clientX - rect.left, r);
+    const anchor = xToF(e.clientX - rect.left, r);
     const f = Math.exp(e.deltaY * 0.0015);
-    let ns = Math.min(film.durationMs * 4, Math.max(400, span * f));
-    const frac = (anchor - view.t0) / span;
-    view.t0 = anchor - frac * ns; view.t1 = view.t0 + ns;
+    /* Floor the zoom at 8 frames across — past that a frame is wider than the
+       track and the ruler stops meaning anything. */
+    const ns = Math.min(film.durationFrames * 4, Math.max(8, span * f));
+    const frac = (anchor - view.f0) / span;
+    view.f0 = anchor - frac * ns; view.f1 = view.f0 + ns;
   }
   /* keep the window from drifting far outside the move */
-  const pad = film.durationMs * 0.25;
-  if (view.t0 < -pad) { const s = view.t1 - view.t0; view.t0 = -pad; view.t1 = -pad + s; }
-  if (view.t1 > film.durationMs + pad) { const s = view.t1 - view.t0; view.t1 = film.durationMs + pad; view.t0 = view.t1 - s; }
+  const pad = film.durationFrames * 0.25;
+  if (view.f0 < -pad) { const w = view.f1 - view.f0; view.f0 = -pad; view.f1 = -pad + w; }
+  if (view.f1 > film.durationFrames + pad) { const w = view.f1 - view.f0; view.f1 = film.durationFrames + pad; view.f0 = view.f1 - w; }
   render();
 }, { passive: false });
 
@@ -562,7 +673,7 @@ function hit(mx, my) {
   for (let i = 0; i < 3; i++) {
     const r = trackRect(i), s = axisScale(i), pts = film.axes[i].points;
     for (let k = 0; k < pts.length; k++) {
-      const x = tToX(pts[k].time, r), y = posToY(pts[k].position, r, s);
+      const x = fToX(pts[k].frame, r), y = posToY(pts[k].position, r, s);
       if ((mx - x) ** 2 + (my - y) ** 2 < 90) return { track: i, k, r, s };
     }
   }
@@ -584,14 +695,16 @@ cv.addEventListener("pointermove", (e) => {
   if (drag.type === "ph") return movePlayhead(mx);
   if (drag.type === "pan") {
     const r = { x: PAD_L, w: cv.clientWidth - PAD_L - PAD_R };
-    const d = ((drag.x - mx) / r.w) * (view.t1 - view.t0);
-    view.t0 += d; view.t1 += d; drag.x = mx; return render();
+    const d = ((drag.x - mx) / r.w) * (view.f1 - view.f0);
+    view.f0 += d; view.f1 += d; drag.x = mx; return render();
   }
   const { track, k, r, s } = drag, pts = film.axes[track].points;
   pts[k].position = Math.round(yToPos(my, r, s));
   if (k > 0 && k < pts.length - 1) {
-    const lo = pts[k - 1].time + 100, hi = pts[k + 1].time - 100;
-    pts[k].time = Math.round(Math.max(lo, Math.min(hi, xToT(mx, r))));
+    /* Frame-quantised, and never closer than one frame to a neighbour: two
+       keyframes on the same frame is not a move the solver can interpret. */
+    const lo = pts[k - 1].frame + MIN_GAP, hi = pts[k + 1].frame - MIN_GAP;
+    pts[k].frame = Math.max(lo, Math.min(hi, xToFrame(mx, r)));
   }
   updateInspector(); refreshPreview();
 });
@@ -603,7 +716,7 @@ cv.addEventListener("dblclick", (e) => {
 });
 function movePlayhead(mx) {
   const r = { x: PAD_L, w: cv.clientWidth - PAD_L - PAD_R };
-  playheadMs = Math.round(Math.max(0, Math.min(film.durationMs, xToT(mx, r))));
+  playheadFrame = Math.max(0, Math.min(film.durationFrames, xToFrame(mx, r)));
   render();
 }
 
@@ -621,17 +734,28 @@ function updateInspector() {
   const pts = film.axes[selection.track].points;
   const end = selection.k === 0 || selection.k === pts.length - 1;
   $("kfLabel").textContent = `${AXES[selection.track].name} · key ${selection.k + 1}/${pts.length}${end ? " (endpoint)" : ""}`;
-  $("kfTime").value = (p.time / 1000).toFixed(1);
+  $("kfTime").value = String(p.frame);
+  $("kfTc").value = tcOf(p.frame);
   $("kfPos").value = String(Math.round(p.position));
-  $("kfTime").disabled = end; $("kfDelete").disabled = end;
+  $("kfTime").disabled = end; $("kfTc").disabled = end; $("kfDelete").disabled = end;
 }
-$("kfTime").onchange = () => {
-  if (!selection) return;
+
+/** Clamp a keyframe to whole frames inside its neighbours, then commit. */
+function setKeyFrameNumber(frame) {
   const pts = film.axes[selection.track].points, k = selection.k;
   if (k === 0 || k === pts.length - 1) return;
   snapshot();
-  pts[k].time = Math.round(Math.max(pts[k - 1].time + 100, Math.min(pts[k + 1].time - 100, Number($("kfTime").value) * 1000)));
+  pts[k].frame = Math.max(pts[k - 1].frame + MIN_GAP, Math.min(pts[k + 1].frame - MIN_GAP, Math.round(frame)));
   updateInspector(); refreshPreview();
+}
+$("kfTime").onchange = () => { if (selection) setKeyFrameNumber(Number($("kfTime").value)); };
+$("kfTc").onchange = () => {
+  if (!selection) return;
+  try {
+    /* Typed timecode is absolute (it includes the move's start TC), so subtract
+       the start to get a frame offset within the move. */
+    setKeyFrameNumber(TC.timecodeToFrames($("kfTc").value, film.timebase) - film.startFrame);
+  } catch (err) { status(err.message); updateInspector(); }
 };
 $("kfPos").onchange = () => {
   if (!selection) return;
@@ -646,10 +770,14 @@ async function capture(i) {
   const a = AXES[i], pos = await window.nmx.position(a.motor);
   snapshot();
   const pts = film.axes[i].points;
-  const near = pts.findIndex((p) => Math.abs(p.time - playheadMs) < 250);
-  if (near >= 0) pts[near].position = pos;
-  else { pts.push({ time: playheadMs, position: pos }); pts.sort((x, y) => x.time - y.time); }
-  status(`${a.name} key @ ${(playheadMs / 1000).toFixed(1)}s = ${pos} steps`);
+  /* Replace the key under the playhead rather than stacking a second one on
+     top of it — within half a second, because that is the precision of a hand
+     on a jog control, not of the playhead. */
+  const window_ = Math.max(1, Math.round(TC.fpsDecimal(film.timebase) / 2));
+  const near = pts.findIndex((p) => Math.abs(p.frame - playheadFrame) <= window_);
+  if (near >= 0) { pts[near].position = pos; pts[near].frame = playheadFrame; }
+  else { pts.push({ frame: playheadFrame, position: pos }); pts.sort((x, y) => x.frame - y.frame); }
+  status(`${a.name} key @ ${tcOf(playheadFrame)} (${playheadFrame}f) = ${pos} steps`);
   refreshPreview();
 }
 $("capSlide").onclick = () => capture(0);
@@ -659,28 +787,214 @@ $("capTilt").onclick = () => capture(2);
 /* ---------------- move params / files ---------------- */
 $("tlDuration").onchange = () => {
   snapshot();
-  const ms = Math.max(2000, Number($("tlDuration").value) * 1000), sc = ms / film.durationMs;
-  for (const ax of film.axes) for (const p of ax.points) p.time = Math.round(p.time * sc);
-  film.durationMs = ms; playheadMs = Math.min(playheadMs, ms); frameAll(); refreshPreview();
+  const dur = Math.max(2, Math.round(Number($("tlDuration").value)));
+  const sc = dur / film.durationFrames;
+  for (const ax of film.axes) for (const p of ax.points) p.frame = Math.round(p.frame * sc);
+  /* Rescaling can collide keys onto one frame; push them apart in order. */
+  for (const ax of film.axes) {
+    for (let k = 1; k < ax.points.length; k++) {
+      if (ax.points[k].frame <= ax.points[k - 1].frame) ax.points[k].frame = ax.points[k - 1].frame + MIN_GAP;
+    }
+    ax.points[ax.points.length - 1].frame = Math.min(ax.points[ax.points.length - 1].frame, dur);
+  }
+  film.durationFrames = dur;
+  playheadFrame = Math.min(playheadFrame, dur);
+  syncInputs(); frameAll(); refreshPreview();
 };
-$("tlCue").onchange = () => { film.startDelayMs = Number($("tlCue").value) * 1000; };
+$("tlCue").onchange = () => { film.cueFrames = Math.max(0, Math.round(Number($("tlCue").value))); syncInputs(); };
+$("tlStartTc").onchange = () => {
+  try { film.startFrame = TC.timecodeToFrames($("tlStartTc").value, film.timebase); }
+  catch (err) { status(err.message); }
+  syncInputs(); updateInspector(); render();
+};
+/**
+ * Changing the timebase RETIMES the move: frame numbers are recomputed so the
+ * rig does exactly what it did before, in the same real seconds. The alternative
+ * — keeping frame numbers and letting the move get shorter or longer — would
+ * silently change a move that has already been matched to a performance.
+ */
+$("tlTimebase").onchange = () => {
+  const tb = TC.timebaseById($("tlTimebase").value);
+  if (!tb) return;
+  snapshot();
+  const from = film.timebase;
+  film.durationFrames = Math.max(2, TC.retimeFrames(film.durationFrames, from, tb));
+  film.cueFrames = TC.retimeFrames(film.cueFrames, from, tb);
+  film.startFrame = TC.retimeFrames(film.startFrame, from, tb);
+  for (const ax of film.axes) {
+    for (const pt of ax.points) pt.frame = TC.retimeFrames(pt.frame, from, tb);
+    for (let k = 1; k < ax.points.length; k++) {
+      if (ax.points[k].frame <= ax.points[k - 1].frame) ax.points[k].frame = ax.points[k - 1].frame + MIN_GAP;
+    }
+  }
+  playheadFrame = TC.retimeFrames(playheadFrame, from, tb);
+  film.timebase = { ...tb };
+  uploaded = false;
+  syncInputs(); frameAll(); refreshPreview();
+  status(`Timebase ${TC.timebaseLabel(tb)} — move retimed to ${film.durationFrames} frames, same real duration.`);
+};
 $("moveName").onchange = () => { film.name = $("moveName").value; };
 
-function adopt(f) { film = f; undoStack.length = 0; redoStack.length = 0; selection = null; updateInspector(); syncInputs(); playheadMs = 0; frameAll(); refreshPreview(); }
-$("tlNew").onclick = () => adopt(defaultFilm(Number($("tlDuration").value) * 1000));
-$("tlSave").onclick = async () => {
-  try { const p = await window.nmx.saveFilm(film); if (p) { logPass(`saved “${film.name}”`); status("Saved: " + p); } }
-  catch (e) { status("Save failed: " + e.message); }
+function adopt(f, path = null) {
+  film = f; undoStack.length = 0; redoStack.length = 0; selection = null;
+  filePath = path; dirty = false;
+  updateInspector(); syncInputs(); playheadFrame = 0; frameAll(); refreshPreview();
+}
+
+function markDirty() { dirty = true; updateFileLabel(); }
+
+function updateFileLabel() {
+  const name = filePath ? filePath.replace(/^.*\//, "") : "not saved yet";
+  $("tlFilePath").textContent = (dirty ? "• " : "") + name;
+  $("tlFilePath").title = filePath ?? "This move has never been written to disk";
+  /* Save is only dead when there is a file AND nothing has changed since —
+     never when the move has no file yet, or the first Save would look broken. */
+  $("tlSave").disabled = Boolean(filePath) && !dirty;
+}
+$("tlNew").onclick = () => {
+  if (dirty && !confirm("Discard unsaved changes to this move?")) return;
+  adopt(defaultFilm(Math.round(Number($("tlDuration").value)), film.timebase));
+  status("New move.");
 };
+
+/** Save to the current file. With no current file this becomes Save As. */
+async function saveMove(forceDialog) {
+  try {
+    const p = await window.nmx.saveFilm(film, forceDialog ? null : filePath);
+    if (!p) return null;                       // cancelled
+    filePath = p; dirty = false; updateFileLabel();
+    logPass(`saved “${film.name}”`);
+    status("Saved: " + p);
+    return p;
+  } catch (e) {
+    status("Save failed: " + e.message);       // main also raises a dialog
+    return null;
+  }
+}
+$("tlSave").onclick = () => saveMove(false);
+$("tlSaveAs").onclick = () => saveMove(true);
+
 $("tlLoad").onclick = async () => {
-  try { const f = await window.nmx.loadFilm(); if (f) { adopt(f); status(`Loaded “${f.name}”.`); } }
-  catch (e) { status("Load failed: " + e.message); }
+  if (dirty && !confirm("Discard unsaved changes to this move?")) return;
+  try {
+    const r = await window.nmx.loadFilm();
+    if (!r) return;
+    adopt(r.film, r.path);
+    status(`Opened “${r.film.name}” — ${TC.formatDuration(r.film.durationFrames, r.film.timebase)} @ ${TC.timebaseLabel(r.film.timebase)} fps.`);
+    if (r.film.notes) logPass(r.film.notes.split("\n")[0]);
+  } catch (e) { status("Open failed: " + e.message); }
+};
+
+/* ---------------- 3D export (ADR-0015) ---------------- */
+
+let exPrefs = null, exFormats = [];
+
+const EX_FIELDS = {
+  exSlideCal: ["calibration", "slideStepsPerMm"], exPanCal: ["calibration", "panStepsPerDeg"],
+  exTiltCal: ["calibration", "tiltStepsPerDeg"], exNodal: ["calibration", "nodalOffsetMm"],
+  exHead: ["calibration", "headHeightMm"],
+  exFocal: ["lens", "focalLengthMm"], exSensorW: ["lens", "sensorWidthMm"], exSensorH: ["lens", "sensorHeightMm"],
+  exPxPerM: [null, "pixelsPerMeter"], exCompW: [null, "compWidth"], exCompH: [null, "compHeight"],
+};
+const EX_CHECKS = { exInvSlide: "invertSlide", exInvPan: "invertPan", exInvTilt: "invertTilt" };
+
+function exportOptsFromUi() {
+  return {
+    calibration: { ...exPrefs.calibration },
+    lens: { ...exPrefs.lens },
+    metersPerUnit: Number($("exUnits").value),
+    upAxis: $("exUp").value,
+    pixelsPerMeter: exPrefs.pixelsPerMeter,
+    compWidth: exPrefs.compWidth,
+    compHeight: exPrefs.compHeight,
+  };
+}
+
+function syncExportUi() {
+  for (const [id, [group, key]] of Object.entries(EX_FIELDS)) {
+    $(id).value = String((group ? exPrefs[group] : exPrefs)[key] ?? 0);
+  }
+  for (const [id, key] of Object.entries(EX_CHECKS)) $(id).checked = Boolean(exPrefs.calibration[key]);
+  $("exUnits").value = String(exPrefs.metersPerUnit);
+  $("exUp").value = exPrefs.upAxis;
+  $("exFormat").value = exPrefs.formatId;
+  const fmt = exFormats.find((f) => f.id === exPrefs.formatId);
+  $("exNote").textContent = fmt?.note ?? "";
+  // AE is the only target with no real-world units, so its mapping row is the
+  // only one that is conditional — showing it always would imply the others
+  // need it too.
+  $("exAeRow").style.display = exPrefs.formatId === "ae" ? "" : "none";
+  refreshExtents();
+}
+
+/**
+ * The pre-flight scale check. Reading "travel 412 mm · pan 37.4°" catches a
+ * calibration that is out by a factor of ten far more reliably than opening
+ * the exported file in another application does.
+ */
+async function refreshExtents() {
+  try {
+    const e = await window.nmx.moveExtents(film, exPrefs.calibration);
+    const mpu = Number($("exUnits").value);
+    const unit = mpu === 1 ? "m" : "cm";
+    const toScene = (mm) => (mm / 1000 / mpu).toFixed(3);
+    const row = (label, sp, u, extra = "") =>
+      `${label.padEnd(6)} ${sp.min.toFixed(1).padStart(9)} → ${sp.max.toFixed(1).padStart(9)} ${u}` +
+      `   travel ${sp.range.toFixed(1)} ${u}${extra}`;
+    $("exExtents").textContent = [
+      row("slide", e.slideMm, "mm", `  (${toScene(e.slideMm.range)} ${unit} in scene)`),
+      row("pan", e.panDeg, "°"),
+      row("tilt", e.tiltDeg, "°"),
+    ].join("\n");
+  } catch (err) { $("exExtents").textContent = "scale check failed: " + err.message; }
+}
+
+async function openExport() {
+  if (!exFormats.length) exFormats = await window.nmx.exportFormats();
+  if (!$("exFormat").options.length) {
+    $("exFormat").innerHTML = exFormats.map((f) => `<option value="${f.id}">${f.label}</option>`).join("");
+  }
+  syncExportUi();
+  $("exportModal").classList.add("open");
+}
+$("tlExport").onclick = openExport;
+
+function wireExportInputs() {
+  for (const [id, [group, key]] of Object.entries(EX_FIELDS)) {
+    $(id).addEventListener("change", () => {
+      const v = Number($(id).value);
+      if (!Number.isFinite(v)) return;
+      if (group) exPrefs[group][key] = v; else exPrefs[key] = v;
+      persistExport(); refreshExtents();
+    });
+  }
+  for (const [id, key] of Object.entries(EX_CHECKS)) {
+    $(id).addEventListener("change", () => {
+      exPrefs.calibration[key] = $(id).checked; persistExport(); refreshExtents();
+    });
+  }
+  $("exUnits").onchange = () => { exPrefs.metersPerUnit = Number($("exUnits").value); persistExport(); refreshExtents(); };
+  $("exUp").onchange = () => { exPrefs.upAxis = $("exUp").value; persistExport(); };
+  $("exFormat").onchange = () => { exPrefs.formatId = $("exFormat").value; persistExport(); syncExportUi(); };
+}
+
+function persistExport() { window.nmx.setPrefs({ export: exPrefs }); }
+
+$("exGo").onclick = async () => {
+  try {
+    const r = await window.nmx.exportMove(film, exPrefs.formatId, exportOptsFromUi());
+    if (!r) return;
+    $("exportModal").classList.remove("open");
+    const names = r.written.map((p) => p.replace(/^.*\//, "")).join(" + ");
+    logPass(`exported ${names}`);
+    status(`Exported ${r.format}: ${names}`);
+  } catch (e) { status("Export failed: " + e.message); }
 };
 
 /* ---------------- KF transport ---------------- */
 $("tlUpload").onclick = async () => {
   try {
-    const n = await window.nmx.uploadKf(film.axes.map((a) => ({ axis: a.axis, points: a.points })), film.durationMs);
+    const n = await window.nmx.uploadKf(film);
     uploaded = true; status(`Uploaded to controller (${n} packets). Ready to run.`);
   } catch (e) { status("Upload blocked: " + e.message); }
 };
@@ -692,7 +1006,7 @@ $("tlRun").onclick = async () => {
   try {
     if (!uploaded) return status("Upload first (↑) — edits since last upload aren’t on the controller.");
     kfPassCount++; $("tlPassCounter").textContent = "pass " + kfPassCount;
-    await countdown(Math.round(film.startDelayMs / 1000));
+    await countdown(Math.round((await window.nmx.cueMs(film)) / 1000));
     await window.nmx.kfRun();
     logPass(`KF pass ${kfPassCount} — “${film.name}”`);
     clearInterval(pollTimer);
@@ -715,16 +1029,18 @@ $("markStart").onclick = async () => { await window.nmx.setStartHere(); status("
 $("markStop").onclick = async () => { await window.nmx.setStopHere(); status("END marked at current positions."); };
 $("arm").onclick = async () => {
   try {
-    const ms = Number($("travel").value) * 1000, ac = Math.min(2000, ms / 4);
-    await window.nmx.armMove(ms, ac, ac);
-    status(`Armed: ${$("travel").value}s continuous, quadratic ease.`);
+    const travelFrames = Math.max(1, Math.round(Number($("travel").value)));
+    /* Ease over a quarter of the move, capped at 2 s worth of frames. */
+    const ease = Math.min(Math.round(TC.fpsDecimal(film.timebase) * 2), Math.round(travelFrames / 4));
+    await window.nmx.armMove(travelFrames, ease, ease, film.timebase);
+    status(`Armed: ${TC.formatDuration(travelFrames, film.timebase)} continuous, quadratic ease.`);
   } catch (e) { status("Arm blocked: " + e.message); }
 };
 $("gotoStart").onclick = async () => { await window.nmx.gotoStart(); status("Sending axes to start marks…"); };
 $("run").onclick = async () => {
   try {
     passCount++; $("passCounter").textContent = "pass " + passCount;
-    await countdown(Number($("tlCue").value));
+    await countdown(Math.round((await window.nmx.cueMs(film)) / 1000));
     await window.nmx.run(); logPass(`classic pass ${passCount}`);
     clearInterval(pollTimer);
     pollTimer = setInterval(async () => {
@@ -770,6 +1086,10 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "?" || (e.key === "/" && e.shiftKey)) { e.preventDefault(); return $("helpModal").classList.toggle("open"); }
   const meta = e.metaKey || e.ctrlKey;
   if (meta && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? redo() : undo(); return; }
+  if (meta && e.key.toLowerCase() === "s") { e.preventDefault(); saveMove(e.shiftKey); return; }
+  if (meta && e.key.toLowerCase() === "o") { e.preventDefault(); $("tlLoad").click(); return; }
+  if (meta && e.key.toLowerCase() === "n") { e.preventDefault(); $("tlNew").click(); return; }
+  if (meta && e.shiftKey && e.key.toLowerCase() === "e") { e.preventDefault(); openExport(); return; }
   if (e.key === "f" || e.key === "Home") { e.preventDefault(); return frameAll(); }
   if (e.key === " ") { e.preventDefault(); return $("tlRun").click(); }
   if (!selection) return;
@@ -779,19 +1099,38 @@ window.addEventListener("keydown", (e) => {
   const stepPos = e.shiftKey ? 100 : 10;
   if (e.key === "ArrowUp" || e.key === "ArrowDown") { e.preventDefault(); snapshot(); p.position += e.key === "ArrowUp" ? stepPos : -stepPos; }
   else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && e.altKey && !end) {
+    /* One frame per press — the unit the operator is thinking in. Shift jumps
+       a second, which at 24 fps is 24 frames, not "about a second". */
     e.preventDefault(); snapshot();
-    p.time = Math.max(pts[selection.k - 1].time + 100, Math.min(pts[selection.k + 1].time - 100, p.time + (e.key === "ArrowRight" ? 100 : -100)));
+    const stepF = e.shiftKey ? Math.round(TC.fpsDecimal(film.timebase)) : 1;
+    const d = e.key === "ArrowRight" ? stepF : -stepF;
+    p.frame = Math.max(pts[selection.k - 1].frame + MIN_GAP,
+                       Math.min(pts[selection.k + 1].frame - MIN_GAP, p.frame + d));
   } else if (e.key === "Backspace" || e.key === "Delete") { e.preventDefault(); return delKey(selection.track, selection.k); }
   else return;
   updateInspector(); refreshPreview();
 });
 
 /* ---------------- init ---------------- */
+function buildTimebasePicker() {
+  $("tlTimebase").innerHTML = TC.TIMEBASES
+    .map((t) => `<option value="${t.id}">${t.label}</option>`).join("");
+  $("tlTimebase").value = TC.timebaseId(film.timebase);
+}
+
 (async function init() {
   buildAxes();
+  buildTimebasePicker();
   await refreshPorts();
   try {
     const p = await window.nmx.getPrefs();
+    exPrefs = p?.export ?? {
+      formatId: "usda", metersPerUnit: 1, upAxis: "Y", pixelsPerMeter: 1000,
+      compWidth: 1920, compHeight: 1080,
+      calibration: { slideStepsPerMm: 100, panStepsPerDeg: 100, tiltStepsPerDeg: 100, nodalOffsetMm: 0, headHeightMm: 0 },
+      lens: { focalLengthMm: 35, sensorWidthMm: 24.89, sensorHeightMm: 14 },
+    };
+    wireExportInputs();
     if (p?.jogSpeed) $("speed").value = p.jogSpeed;
     if (p?.gamepad) padCfg = { ...padCfg, ...p.gamepad, bindings: { ...padCfg.bindings, ...(p.gamepad.bindings ?? {}) } };
     if (Array.isArray(p?.limits) && p.limits.length === 3) limits = p.limits;

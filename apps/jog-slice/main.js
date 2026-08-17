@@ -14,6 +14,8 @@ import {
   general, motors, cam, keyFrame,
   buildKeyFrameMove, runSequence, computeVelocities, splineAt,
   serializeFilm, deserializeFilm,
+  filmAxesToMs, filmDurationMs, filmCueMs, msToFramesExact, framesToMs,
+  EXPORT_FORMATS, DEFAULT_CALIBRATION, DEFAULT_LENS, moveExtents, alembicConverterScript,
   NO_LIMITS, isTaught, jogWouldExceed, violationsForFilm, describeViolations,
 } from "@graffik-ng/nmx-protocol";
 
@@ -43,6 +45,19 @@ const DEFAULT_PREFS = {
     maxSpeedPct: 100, // scales the jog-speed field at full deflection
   },
   recent: [],
+  /* 3D export settings (ADR-0015). Calibration is a property of the RIG, so it
+     belongs in preferences, not in the move file — the same move exported from
+     a re-belted rig needs the new numbers, not the old ones. */
+  export: {
+    formatId: "usda",
+    metersPerUnit: 1,
+    upAxis: "Y",
+    pixelsPerMeter: 1000,
+    compWidth: 1920,
+    compHeight: 1080,
+    calibration: { ...DEFAULT_CALIBRATION },
+    lens: { ...DEFAULT_LENS },
+  },
 };
 
 const PREFS_PATH = path.join(app.getPath("userData"), "preferences.json");
@@ -59,6 +74,17 @@ function loadPrefs() {
         bindings: { ...DEFAULT_PREFS.gamepad.bindings, ...(raw.gamepad?.bindings ?? {}) },
       },
       limits: Array.isArray(raw.limits) && raw.limits.length === 3 ? raw.limits : structuredClone(NO_LIMITS),
+      /* `recent` was the one sub-object without a guard, and it is read with
+         .filter() by both save and load — so a preferences file carrying
+         anything but an array broke exactly those two commands and nothing
+         else. Every sub-object gets a guard now; none of them may be trusted
+         to have survived an older build. */
+      recent: Array.isArray(raw.recent) ? raw.recent.filter((p) => typeof p === "string") : [],
+      export: {
+        ...DEFAULT_PREFS.export, ...(raw.export ?? {}),
+        calibration: { ...DEFAULT_CALIBRATION, ...(raw.export?.calibration ?? {}) },
+        lens: { ...DEFAULT_LENS, ...(raw.export?.lens ?? {}) },
+      },
     };
   } catch { /* first run, or corrupt — defaults are fine */ }
 }
@@ -230,8 +256,12 @@ ipcMain.handle("nmx:position", async (_e, motor) => {
 ipcMain.handle("nmx:set-start-here", () => requireClient().send(general.setStartHere()));
 ipcMain.handle("nmx:set-stop-here", () => requireClient().send(general.setStopHere()));
 
-ipcMain.handle("nmx:arm-move", async (_e, travelMs, accelMs, decelMs) => {
+/** Classic 2-point arm. Frames in (ADR-0014); ms only inside, for the wire. */
+ipcMain.handle("nmx:arm-move", async (_e, travelFrames, accelFrames, decelFrames, timebase) => {
   const c = requireProgrammedMovesAllowed();
+  const travelMs = framesToMs(travelFrames, timebase);
+  const accelMs = framesToMs(accelFrames, timebase);
+  const decelMs = framesToMs(decelFrames, timebase);
   await c.send(general.setProgramMode(1));
   await c.send(general.setStartDelay(0));   // cue countdown is host-side
   for (const m of [1, 2, 3]) {
@@ -254,28 +284,41 @@ ipcMain.handle("nmx:progress", async () => {
 
 /* ---------------- IPC: key-frame engine ---------------- */
 
-/** Pure math — no client needed; the editor works disconnected (ADR-0009). */
-ipcMain.handle("nmx:preview-move", (_e, axes, durationMs, sampleCount = 140) =>
-  axes.map(({ axis, points }) => {
+/**
+ * Pure math — no client needed; the editor works disconnected (ADR-0009).
+ *
+ * Takes and returns FRAMES (ADR-0014): the renderer hands over the whole film
+ * and gets sample points on the frame axis. Milliseconds exist only inside this
+ * handler, where the solver needs them, and never cross the IPC boundary — one
+ * object in, one unit out, so the two sides cannot disagree about units.
+ */
+ipcMain.handle("nmx:preview-move", (_e, film, sampleCount = 140) => {
+  const tb = film.timebase;
+  const msAxes = filmAxesToMs(film);
+  const durMs = filmDurationMs(film);
+  return msAxes.map(({ axis, points }) => {
     const solved = computeVelocities(points);
     const samples = [];
     for (let i = 0; i <= sampleCount; i++) {
-      const t = (durationMs * i) / sampleCount;
-      samples.push({ t, pos: splineAt(solved, t).value });
+      const t = (durMs * i) / sampleCount;
+      samples.push({ frame: msToFramesExact(t, tb), pos: splineAt(solved, t).value });
     }
     return { axis, solved, samples };
-  }));
+  });
+});
 
-ipcMain.handle("nmx:upload-kf", async (_e, axes, durationMs) => {
+ipcMain.handle("nmx:upload-kf", async (_e, film) => {
   const c = requireProgrammedMovesAllowed();
   // Nothing reaches the controller before the whole move is checked (ADR-0013).
-  const film = { format: "graffik-ng-move", version: 1, name: "x", durationMs, startDelayMs: 0, engine: "keyframe", axes };
   const v = violationsForFilm(film, prefs.limits);
   if (v.length) throw new Error("Soft limits: " + describeViolations(v));
-  const packets = buildKeyFrameMove(axes.map(({ axis, points }) => ({ axis, points })), { videoTimeMs: durationMs });
+  const packets = buildKeyFrameMove(filmAxesToMs(film), { videoTimeMs: filmDurationMs(film) });
   for (const p of packets) await c.send(p);
   return packets.length;
 });
+
+/** Cue countdown length in ms — the renderer counts down, main owns the math. */
+ipcMain.handle("nmx:cue-ms", (_e, film) => filmCueMs(film));
 
 ipcMain.handle("nmx:kf-run", async () => {
   const c = requireProgrammedMovesAllowed();
@@ -311,17 +354,52 @@ ipcMain.handle("nmx:cam-disable", () => requireClient().send(cam.setEnable(false
 
 /* ---------------- IPC: films ---------------- */
 
-ipcMain.handle("nmx:save-film", async (e, film) => {
+/** Push a path onto the recent list. Never throws — it is bookkeeping, and it
+    must not be able to fail a save the user has already committed to. */
+function remember(filePath) {
+  try {
+    if (!Array.isArray(prefs.recent)) prefs.recent = [];
+    prefs.recent = [filePath, ...prefs.recent.filter((p) => p !== filePath)].slice(0, 8);
+    savePrefs();
+  } catch { /* bookkeeping only */ }
+}
+
+/** Surface a failure where it cannot be missed. A status-bar line is fine for
+    "connected"; it is not fine for "your move did not save". */
+function reportFailure(win, what, err) {
+  const message = err?.message ?? String(err);
+  console.error(`[graffik] ${what} failed:`, err);
+  dialog.showMessageBox(win, {
+    type: "error", title: `${what} failed`, message: `${what} failed`, detail: message,
+    buttons: ["OK"], noLink: true,
+  }).catch(() => {});
+  return message;
+}
+
+/**
+ * Save the move. With `existingPath` this is Save (no dialog); without it this
+ * is Save As. Serialisation happens BEFORE the dialog so an invalid move is
+ * refused without first asking the operator where to put it.
+ */
+ipcMain.handle("nmx:save-film", async (e, film, existingPath) => {
   const win = BrowserWindow.fromWebContents(e.sender);
-  const { canceled, filePath } = await dialog.showSaveDialog(win, {
-    defaultPath: `${film.name.replace(/[^\w\- ]+/g, "") || "move"}.graffik`,
-    filters: [{ name: "Graffik NG Move", extensions: ["graffik"] }],
-  });
-  if (canceled || !filePath) return null;
-  await fs.writeFile(filePath, serializeFilm({ ...film, savedAt: new Date().toISOString() }), "utf-8");
-  prefs.recent = [filePath, ...prefs.recent.filter((p) => p !== filePath)].slice(0, 8);
-  savePrefs();
-  return filePath;
+  try {
+    const text = serializeFilm({ ...film, savedAt: new Date().toISOString() });
+    let filePath = existingPath;
+    if (!filePath) {
+      const r = await dialog.showSaveDialog(win, {
+        defaultPath: `${film.name.replace(/[^\w\- ]+/g, "").trim() || "move"}.graffik`,
+        filters: [{ name: "Graffik NG Move", extensions: ["graffik"] }],
+      });
+      if (r.canceled || !r.filePath) return null;
+      filePath = r.filePath;
+    }
+    await fs.writeFile(filePath, text, "utf-8");
+    remember(filePath);
+    return filePath;
+  } catch (err) {
+    throw new Error(reportFailure(win, "Save", err));
+  }
 });
 
 ipcMain.handle("nmx:load-film", async (e, presetPath) => {
@@ -334,10 +412,51 @@ ipcMain.handle("nmx:load-film", async (e, presetPath) => {
     if (canceled || !filePaths.length) return null;
     file = filePaths[0];
   }
-  const film = deserializeFilm(await fs.readFile(file, "utf-8"));
-  prefs.recent = [file, ...prefs.recent.filter((p) => p !== file)].slice(0, 8);
-  savePrefs();
-  return film;
+  try {
+    const film = deserializeFilm(await fs.readFile(file, "utf-8"));
+    remember(file);
+    return { film, path: file };
+  } catch (err) {
+    throw new Error(reportFailure(BrowserWindow.fromWebContents(e.sender), "Open", err));
+  }
+});
+
+/* ---------------- IPC: 3D export (ADR-0015) ---------------- */
+
+ipcMain.handle("nmx:export-formats", () =>
+  EXPORT_FORMATS.map((f) => ({ id: f.id, label: f.label, ext: f.ext, note: f.note })));
+
+/** What the move covers in real units — the pre-flight scale check. */
+ipcMain.handle("nmx:move-extents", (_e, film, calibration) =>
+  moveExtents(film, { ...DEFAULT_CALIBRATION, ...calibration }));
+
+ipcMain.handle("nmx:export-move", async (e, film, formatId, opts) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  const fmt = EXPORT_FORMATS.find((f) => f.id === formatId);
+  if (!fmt) throw new Error(`unknown export format: ${formatId}`);
+  try {
+    const text = fmt.write(film, opts);        // fails before the dialog if it fails
+    const base = (film.name.replace(/[^\w\- ]+/g, "").trim() || "move").replace(/\s+/g, "-").toLowerCase();
+    const r = await dialog.showSaveDialog(win, {
+      defaultPath: `${base}.${fmt.ext}`,
+      filters: [{ name: fmt.label, extensions: [fmt.ext] }],
+    });
+    if (r.canceled || !r.filePath) return null;
+    await fs.writeFile(r.filePath, text, "utf-8");
+
+    const written = [r.filePath];
+    if (formatId === "abc") {
+      // The Alembic bridge is the USD plus the script that converts it.
+      const dir = path.dirname(r.filePath);
+      const name = path.basename(r.filePath);
+      const scriptPath = path.join(dir, name.replace(/\.usda?$/i, "") + "-convert.py");
+      await fs.writeFile(scriptPath, alembicConverterScript(name), "utf-8");
+      written.push(scriptPath);
+    }
+    return { written, format: fmt.label };
+  } catch (err) {
+    throw new Error(reportFailure(win, "Export", err));
+  }
 });
 
 /* ---------------- IPC: e-stop ---------------- */

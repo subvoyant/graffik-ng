@@ -15,7 +15,7 @@ import { SerialPort } from "serialport";
 import {
   NmxClient, SimulatedNmx, handshake,
   buildKeyFrameMove, runSequence, keyFrame, motors, general, broadcast,
-  deserializeFilm,
+  deserializeFilm, filmAxesToMs, filmDurationMs, filmCueMs, formatDuration, timebaseLabel,
 } from "@graffik-ng/nmx-protocol";
 
 const NMX_BAUD = 19200;
@@ -74,7 +74,7 @@ async function main() {
       const file = args[1] ?? die("usage: nmx run <file.graffik> --port <path>");
       const passes = Number(flag("passes") ?? 1);
       const film = deserializeFilm(await fs.readFile(file, "utf-8"));
-      const cueS = Number(flag("cue") ?? Math.round(film.startDelayMs / 1000));
+      const cueS = Number(flag("cue") ?? Math.round(filmCueMs(film) / 1000));
       const { client, close } = await openClient();
       const cleanup = async () => { try { await client.stopAll(); await close(); } catch { /* gone */ } };
       process.on("SIGINT", async () => { console.log("\nSIGINT → e-stop"); await cleanup(); process.exit(130); });
@@ -87,11 +87,11 @@ async function main() {
       await client.send(general.setJoystickWatchdog(true));
       for (const m of [1, 2, 3]) await client.send(motors.setEnable(m, true));
 
-      console.log(`uploading "${film.name}" (${(film.durationMs / 1000).toFixed(0)}s, ${film.axes.length} axes)…`);
-      const packets = buildKeyFrameMove(
-        film.axes.map((a) => ({ axis: a.axis, points: a.points })),
-        { videoTimeMs: film.durationMs },
+      console.log(
+        `uploading "${film.name}" — ${formatDuration(film.durationFrames, film.timebase)} ` +
+        `@ ${timebaseLabel(film.timebase)}, ${film.axes.length} axes…`,
       );
+      const packets = buildKeyFrameMove(filmAxesToMs(film), { videoTimeMs: filmDurationMs(film) });
       for (const p of packets) await client.send(p);
 
       for (let pass = 1; pass <= passes; pass++) {

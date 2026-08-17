@@ -2,34 +2,84 @@
  * Move ("film") persistence — versioned JSON schema for saved camera moves.
  *
  * Lives in the headless core (not the app) so the schema has one owner,
- * round-trips are unit-testable, and a future CLI can run saved moves.
- * See ADR-0010 for the format decision.
+ * round-trips are unit-testable, and the CLI can run saved moves.
+ * See ADR-0010 for the format decision and ADR-0014 for the move to frames.
+ *
+ * **v2 stores time in FRAMES, not milliseconds.** A camera move is authored
+ * against a shooting rate; a keyframe belongs to a frame, not to a millisecond
+ * that happens to fall near one. Milliseconds are computed once, at the
+ * protocol boundary, by `filmAxesToMs` / `filmDurationMs`.
  */
 
 import { KeyFramePoint } from "./spline.js";
 import { AxisIndex } from "./move.js";
+import {
+  Timebase, DEFAULT_TIMEBASE, validateTimebase, framesToMs, msToFrames, framesToTimecode,
+} from "./timecode.js";
 
 export const FILM_FORMAT = "graffik-ng-move";
-export const FILM_VERSION = 1;
+export const FILM_VERSION = 2;
+
+export interface FilmPoint {
+  /** Whole frames from the start of the move. */
+  frame: number;
+  /** Steps. */
+  position: number;
+  /** Steps per ms. Omitted = solved at upload time (the normal case). */
+  velocity?: number;
+}
 
 export interface FilmAxis {
   /** 0 = slide, 1 = pan, 2 = tilt (KF-engine indexing). */
   axis: AxisIndex;
-  /** time in ms from move start; position in steps. Velocity omitted = auto-solve. */
-  points: KeyFramePoint[];
+  points: FilmPoint[];
 }
+
+/**
+ * A cue on the timeline (ADR-0016). `target` is a LOGICAL output name —
+ * "cue-light", not a port and channel — so a move file stays portable between
+ * rigs; the binding to hardware lives in preferences.
+ */
+export interface FilmEvent {
+  id: string;
+  /** Frame the cue fires on. */
+  frame: number;
+  /** Sustained cues (a light held on) end this many frames later. */
+  durationFrames?: number;
+  target: string;
+  action: EventAction;
+  label?: string;
+}
+
+export type EventAction =
+  | { kind: "pulse"; ms?: number }
+  | { kind: "level"; value: number }
+  | { kind: "camera" }
+  | { kind: "dmx"; channel: number; value: number }
+  | { kind: "midi"; status: number; data1: number; data2: number }
+  | { kind: "osc"; address: string; args?: Array<number | string> };
 
 export interface Film {
   format: typeof FILM_FORMAT;
   version: number;
   name: string;
-  /** Total move duration, ms. */
-  durationMs: number;
-  /** Cue countdown before motion, ms. */
-  startDelayMs: number;
+  /** Shooting rate this move is authored against. Exact rational (ADR-0014). */
+  timebase: Timebase;
+  /** Total move length in frames. */
+  durationFrames: number;
+  /** Cue countdown before motion starts, in frames. */
+  cueFrames: number;
+  /**
+   * Timecode of frame 0, as a frame count. Lets a move line up with the
+   * camera's timecode so the pass can be handed to editorial or a 3D package
+   * without anyone recalculating offsets by hand. 0 = start at 00:00:00:00.
+   */
+  startFrame: number;
   /** "classic" = 2-point program engine; "keyframe" = KF engine. */
   engine: "classic" | "keyframe";
   axes: FilmAxis[];
+  /** Timeline cues (ADR-0016). Optional so v2 files predating cues still load. */
+  events?: FilmEvent[];
   /** ISO timestamp of last save (informational only). */
   savedAt?: string;
   notes?: string;
@@ -40,7 +90,7 @@ export function serializeFilm(film: Film): string {
   return JSON.stringify(film, null, 2);
 }
 
-/** Parse + validate. Throws Error with a human-readable reason on bad input. */
+/** Parse + validate, migrating older versions. Throws with a readable reason. */
 export function deserializeFilm(json: string): Film {
   let raw: unknown;
   try {
@@ -48,9 +98,62 @@ export function deserializeFilm(json: string): Film {
   } catch {
     throw new Error("not valid JSON");
   }
-  const f = raw as Film;
+  const f = migrateFilm(raw);
   validateFilm(f);
   return f;
+}
+
+/**
+ * Bring an older file up to the current schema.
+ *
+ * v1 → v2: v1 stored milliseconds and carried no timebase, so the shooting rate
+ * it was authored against is genuinely unknown. We assume 24 and convert real
+ * time faithfully — the move runs exactly as it did before, and the frame
+ * numbers are a best-effort label the operator can re-base if the shoot was on
+ * another rate. Guessing silently would be worse than saying so, so
+ * `notes` records the assumption in the file itself.
+ */
+export function migrateFilm(raw: unknown): Film {
+  const f = raw as Record<string, unknown>;
+  if (!f || typeof f !== "object") throw new Error("film must be an object");
+  if (f.format !== FILM_FORMAT) throw new Error(`unknown format: ${String(f.format)}`);
+  const version = Number(f.version);
+  if (!Number.isFinite(version) || version < 1) throw new Error("missing/invalid version");
+  if (version > FILM_VERSION) {
+    throw new Error(`file version ${version} is newer than this app understands (${FILM_VERSION})`);
+  }
+  if (version === FILM_VERSION) return f as unknown as Film;
+
+  // ---- v1 (milliseconds, no timebase) ----
+  const tb = DEFAULT_TIMEBASE;
+  const durationMs = Number(f.durationMs);
+  const startDelayMs = Number(f.startDelayMs ?? 0);
+  if (!Number.isFinite(durationMs) || durationMs <= 0) throw new Error("v1 film: durationMs must be > 0");
+  const axes = (f.axes as Array<{ axis: AxisIndex; points: Array<{ time: number; position: number; velocity?: number }> }>) ?? [];
+  const note =
+    "Migrated from format v1 on load. v1 stored milliseconds and carried no timebase, " +
+    "so 24 fps was assumed; real-time duration is preserved exactly. If this move was " +
+    "shot at another rate, change the timebase — the frame numbers will re-derive.";
+  return {
+    format: FILM_FORMAT,
+    version: FILM_VERSION,
+    name: String(f.name ?? "Untitled Move"),
+    timebase: tb,
+    durationFrames: msToFrames(durationMs, tb),
+    cueFrames: msToFrames(startDelayMs, tb),
+    startFrame: 0,
+    engine: (f.engine === "classic" ? "classic" : "keyframe"),
+    axes: axes.map((ax) => ({
+      axis: ax.axis,
+      points: ax.points.map((p) => ({
+        frame: msToFrames(p.time, tb),
+        position: p.position,
+        ...(p.velocity === undefined ? {} : { velocity: p.velocity }),
+      })),
+    })),
+    savedAt: typeof f.savedAt === "string" ? f.savedAt : undefined,
+    notes: [f.notes, note].filter(Boolean).join("\n"),
+  };
 }
 
 export function validateFilm(f: Film): void {
@@ -59,8 +162,10 @@ export function validateFilm(f: Film): void {
   if (typeof f.version !== "number" || f.version < 1) throw new Error("missing/invalid version");
   if (f.version > FILM_VERSION) throw new Error(`file version ${f.version} is newer than this app understands (${FILM_VERSION})`);
   if (typeof f.name !== "string") throw new Error("missing name");
-  if (!Number.isFinite(f.durationMs) || f.durationMs <= 0) throw new Error("durationMs must be > 0");
-  if (!Number.isFinite(f.startDelayMs) || f.startDelayMs < 0) throw new Error("startDelayMs must be >= 0");
+  validateTimebase(f.timebase);
+  if (!Number.isInteger(f.durationFrames) || f.durationFrames <= 0) throw new Error("durationFrames must be a positive integer");
+  if (!Number.isInteger(f.cueFrames) || f.cueFrames < 0) throw new Error("cueFrames must be a non-negative integer");
+  if (!Number.isInteger(f.startFrame)) throw new Error("startFrame must be an integer");
   if (f.engine !== "classic" && f.engine !== "keyframe") throw new Error(`unknown engine: ${String(f.engine)}`);
   if (!Array.isArray(f.axes) || f.axes.length === 0) throw new Error("axes must be a non-empty array");
   for (const ax of f.axes) {
@@ -68,29 +173,131 @@ export function validateFilm(f: Film): void {
     if (!Array.isArray(ax.points) || ax.points.length < 2) throw new Error(`axis ${ax.axis}: needs >= 2 points`);
     let prev = -Infinity;
     for (const p of ax.points) {
-      if (!Number.isFinite(p.time) || !Number.isFinite(p.position)) {
-        throw new Error(`axis ${ax.axis}: non-numeric point`);
+      if (!Number.isInteger(p.frame)) throw new Error(`axis ${ax.axis}: keyframe times must be whole frames (got ${String(p.frame)})`);
+      if (!Number.isFinite(p.position)) throw new Error(`axis ${ax.axis}: non-numeric position`);
+      if (p.frame <= prev) throw new Error(`axis ${ax.axis}: keyframes must be strictly increasing`);
+      if (p.frame < 0 || p.frame > f.durationFrames) {
+        throw new Error(`axis ${ax.axis}: frame ${p.frame} is outside the move (0..${f.durationFrames})`);
       }
-      if (p.time <= prev) throw new Error(`axis ${ax.axis}: point times must be strictly increasing`);
-      if (p.time < 0 || p.time > f.durationMs) throw new Error(`axis ${ax.axis}: point time ${p.time} outside 0..durationMs`);
-      prev = p.time;
+      prev = p.frame;
+    }
+  }
+  validateEvents(f);
+}
+
+const EVENT_KINDS = new Set(["pulse", "level", "camera", "dmx", "midi", "osc"]);
+
+export function validateEvents(f: Film): void {
+  if (f.events === undefined) return;
+  if (!Array.isArray(f.events)) throw new Error("events must be an array");
+  const seen = new Set<string>();
+  for (const e of f.events) {
+    if (!e || typeof e !== "object") throw new Error("event must be an object");
+    if (typeof e.id !== "string" || e.id === "") throw new Error("event needs a non-empty id");
+    if (seen.has(e.id)) throw new Error(`duplicate event id: ${e.id}`);
+    seen.add(e.id);
+    if (!Number.isInteger(e.frame)) throw new Error(`event ${e.id}: frame must be a whole frame`);
+    if (e.frame < 0 || e.frame > f.durationFrames) {
+      throw new Error(`event ${e.id}: frame ${e.frame} is outside the move (0..${f.durationFrames})`);
+    }
+    if (e.durationFrames !== undefined) {
+      if (!Number.isInteger(e.durationFrames) || e.durationFrames < 0) {
+        throw new Error(`event ${e.id}: durationFrames must be a non-negative integer`);
+      }
+      if (e.frame + e.durationFrames > f.durationFrames) {
+        throw new Error(`event ${e.id}: ends past the end of the move`);
+      }
+    }
+    if (typeof e.target !== "string" || e.target === "") throw new Error(`event ${e.id}: needs a target`);
+    if (!e.action || !EVENT_KINDS.has(e.action.kind)) {
+      throw new Error(`event ${e.id}: unknown action kind ${String(e.action && e.action.kind)}`);
+    }
+    if (e.action.kind === "dmx") {
+      if (!Number.isInteger(e.action.channel) || e.action.channel < 1 || e.action.channel > 512) {
+        throw new Error(`event ${e.id}: DMX channel must be 1..512`);
+      }
+      if (!Number.isInteger(e.action.value) || e.action.value < 0 || e.action.value > 255) {
+        throw new Error(`event ${e.id}: DMX value must be 0..255`);
+      }
     }
   }
 }
 
-/** A sensible empty film for a new document. */
-export function newFilm(name = "Untitled Move", durationMs = 30_000): Film {
+/**
+ * The cue list handed to a Tier-2 device before a pass (ADR-0016): milliseconds
+ * from GO, sorted, because that is what a microcontroller counts. Frames are
+ * converted here — at the boundary — exactly as keyframes are.
+ */
+export interface Cue { id: string; atMs: number; endMs?: number; target: string; action: EventAction }
+
+export function buildCueList(f: Film): Cue[] {
+  return (f.events ?? [])
+    .map((e) => ({
+      id: e.id,
+      atMs: framesToMs(e.frame, f.timebase),
+      ...(e.durationFrames === undefined
+        ? {}
+        : { endMs: framesToMs(e.frame + e.durationFrames, f.timebase) }),
+      target: e.target,
+      action: e.action,
+    }))
+    .sort((a, b) => a.atMs - b.atMs || a.id.localeCompare(b.id));
+}
+
+/** Events whose fire frame falls in [from, to) — for host-side (Tier 1) dispatch. */
+export function eventsInWindow(f: Film, fromFrame: number, toFrame: number): FilmEvent[] {
+  return (f.events ?? []).filter((e) => e.frame >= fromFrame && e.frame < toFrame);
+}
+
+/* ------------------------------------------------------------------
+   The protocol boundary: frames in, milliseconds out. Nothing upstream
+   of these two functions should ever hold a millisecond (ADR-0014).
+   ------------------------------------------------------------------ */
+
+/** Move length in ms, for the KF engine's video-time field. */
+export function filmDurationMs(f: Film): number {
+  return framesToMs(f.durationFrames, f.timebase);
+}
+
+/** Cue countdown in ms, for the host-side countdown UI. */
+export function filmCueMs(f: Film): number {
+  return framesToMs(f.cueFrames, f.timebase);
+}
+
+/** Axes with keyframe times converted to ms, ready for `buildKeyFrameMove`. */
+export function filmAxesToMs(f: Film): Array<{ axis: AxisIndex; points: KeyFramePoint[] }> {
+  return f.axes.map((ax) => ({
+    axis: ax.axis,
+    points: ax.points.map((p) => ({
+      time: framesToMs(p.frame, f.timebase),
+      position: p.position,
+      ...(p.velocity === undefined ? {} : { velocity: p.velocity }),
+    })),
+  }));
+}
+
+/** Timecode label for a frame within this move (honours `startFrame`). */
+export function filmTimecode(f: Film, frame: number): string {
+  return framesToTimecode(f.startFrame + frame, f.timebase);
+}
+
+/** A sensible empty film for a new document: 10 seconds at the given rate. */
+export function newFilm(name = "Untitled Move", durationFrames?: number, timebase: Timebase = DEFAULT_TIMEBASE): Film {
+  const dur = durationFrames ?? Math.round((timebase.num / timebase.den) * 10);
+  const cue = Math.round((timebase.num / timebase.den) * 5);
   return {
     format: FILM_FORMAT,
     version: FILM_VERSION,
     name,
-    durationMs,
-    startDelayMs: 5_000,
+    timebase,
+    durationFrames: dur,
+    cueFrames: cue,
+    startFrame: 0,
     engine: "keyframe",
     axes: [
-      { axis: 0, points: [{ time: 0, position: 0 }, { time: durationMs, position: 0 }] },
-      { axis: 1, points: [{ time: 0, position: 0 }, { time: durationMs, position: 0 }] },
-      { axis: 2, points: [{ time: 0, position: 0 }, { time: durationMs, position: 0 }] },
+      { axis: 0, points: [{ frame: 0, position: 0 }, { frame: dur, position: 0 }] },
+      { axis: 1, points: [{ frame: 0, position: 0 }, { frame: dur, position: 0 }] },
+      { axis: 2, points: [{ frame: 0, position: 0 }, { frame: dur, position: 0 }] },
     ],
   };
 }

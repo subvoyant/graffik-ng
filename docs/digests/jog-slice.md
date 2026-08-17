@@ -1,10 +1,12 @@
 # Digest: apps/jog-slice (Electron app)
 
-**Verified against** `apps/jog-slice/*` @ 2026-08-17 (v0.6) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
+**Verified against** `apps/jog-slice/*` @ 2026-08-17 (v0.7.1) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
 
 ## Shape
 
-Four files, no bundler: `main.js` (ESM main process — all hardware + film I/O + pure math endpoints), `preload.cjs` (contextBridge → `window.nmx`), `index.html` (markup/styles), `renderer.js` (all UI logic, vanilla). `contextIsolation: true`, `nodeIntegration: false` (ADR-0007).
+Four files, no bundler: `main.js` (ESM main process — all hardware + film I/O + pure math endpoints), `preload.cjs` (contextBridge → `window.nmx` **and `window.tc`**), `index.html` (markup/styles), `renderer.js` (all UI logic, vanilla). `contextIsolation: true`, `nodeIntegration: false` (ADR-0007).
+
+**`window.tc` — the timecode bridge (v0.7, ADR-0014).** preload `require()`s the core package and re-exposes the timecode functions as pure SYNC calls. The renderer redraws on every pointer move, so per-label IPC is absurd; a second copy of the arithmetic in the renderer is worse, because drop-frame drifts quietly. Consequence: the app now hard-depends on the core being **built** (`dist/`), and preload throws a named error if it is not — a loud startup failure instead of a subtle wrong answer. `require()` of an ESM package needs Node ≥22.12, which every supported Electron ships.
 
 ## main.js facts
 
@@ -43,13 +45,18 @@ Teaching: `nmx:set-limit-here (motor, "min"|"max")` queries live position and st
 | **event** nmx:limit-hit | {motor, position, speed} | main→renderer push when the 90ms monitor cuts an axis |
 | nmx:enable-motors / jog / position | — / (motor, ±steps/s) / motor | jog clamped to ±4000; returns `{blocked:true, position}` if a limit refuses it |
 | nmx:set-start-here / set-stop-here | — | classic jog-to-set (gen 26/27) |
-| nmx:arm-move | travelMs, accelMs, decelMs | GATED; mode 1, delay 0, easing quadratic ×3 motors |
+| nmx:arm-move | travel/accel/decel **frames**, timebase | GATED; mode 1, delay 0, easing quadratic ×3 motors |
 | nmx:goto-start / run / pause / progress | — | run GATED; progress = {percent, running} |
-| nmx:preview-move | axes, durationMs, sampleCount? | pure; returns per-axis {solved, samples[{t,pos}]} |
-| nmx:upload-kf | axes, durationMs | GATED; buildKeyFrameMove → returns packet count |
+| nmx:preview-move | **film**, sampleCount? | pure; returns per-axis {solved, samples[{**frame**,pos}]} |
+| nmx:upload-kf | **film** | GATED; limits check → buildKeyFrameMove → returns packet count |
+| nmx:cue-ms | film | cue countdown in ms (main owns frames→ms) |
 | nmx:kf-run / kf-stop / kf-progress | — | run GATED (backlash+run); progress = {state 0/1/2, percent} |
 | nmx:goto-kf-start | axes | sendToPosition(motor, first-keyframe pos) per axis |
-| nmx:save-film / load-film | film / — | native dialogs; `.graffik`; serialize/deserialize in core (ADR-0010); null on cancel |
+| nmx:save-film | film, existingPath? | **path given = Save (no dialog); omitted = Save As**. Serialises BEFORE the dialog so an invalid move is refused without first asking where to put it. Returns the path, or null on cancel |
+| nmx:load-film | path? | returns `{film, path}` (the path is what makes Save work later); migrates v1 on the way in |
+| nmx:export-formats | — | `[{id,label,ext,note}]` — the note is operator-facing and shown in the dialog |
+| nmx:export-move | film, formatId, opts | writes the file; for `abc` also writes the Blender converter script beside it; returns `{written[], format}` |
+| nmx:move-extents | film, calibration | pre-flight scale check: per-axis min/max/range in mm and degrees |
 | nmx:cam-arm / cam-fire / cam-disable | cfg{triggerMs,focusMs,delayMs,maxShots,intervalMs} / — / — | sub-addr 4; arm = enable + params; fire = exposeNow |
 | nmx:stop-all | — | E-STOP; bypasses queue |
 
@@ -83,6 +90,40 @@ Layout is a fixed frame — appbar / rail(244px) / stage / statusbar — with **
 - **Timeline zoom/pan:** `view {t0,t1}` is the visible window. Wheel = zoom about cursor (clamped 400ms…4× duration), ⇧wheel or middle-drag = pan, `F`/`Home` or ⤢ = frame all, drift clamped to ±25% of duration. Ruler ticks auto-step through a nice-number ladder; zoom % shown in the panel header.
 - **Keyframes are diamonds** (animation-software convention), white ring when selected.
 - Space = run pass. Live position readout polls every 400ms while connected.
+
+## Move files vs. export (v0.7.1)
+
+These are **two different commands and must stay that way** — conflating them is what made the first pass confusing.
+
+- **Move file** (`.graffik`, the document): New · Open… · Save · As…, plus `⌘N/⌘O/⌘S/⇧⌘S`. The renderer tracks `filePath` and `dirty`; **Save writes to the current path with no dialog**, Save As always asks, and Save is disabled only when there is a file *and* nothing has changed. Document identity lives in the **status bar** (`• name.graffik`), not the rail — that is where 3D apps put it, and the rail had no room. New/Open confirm before discarding unsaved edits.
+- **Export** (`⇧⌘E`) is a separate dialog for handing the move to another application, and it never touches the `.graffik`.
+
+**Failures are raised as a modal dialog by main, not only in the status line** (`reportFailure`). "Your move did not save" is not a status-bar-grade message.
+
+### The v0.7.0 save/open defect
+
+`prefs.recent` was the one preferences sub-object without a type guard in `loadPrefs`, and it is read with `.filter()` by **both** the save and open handlers and nowhere else — so a preferences file carrying anything but an array broke exactly those two commands and left everything else working. Every sub-object is guarded now, and `remember()` (the recent-list update) is wrapped so bookkeeping can never fail a save the operator has already committed to.
+
+## Export dialog (ADR-0015)
+
+Settings live in `prefs.export` — **calibration is a property of the rig, not of the move**, so the same move exported from a re-belted rig gets the new numbers rather than the old ones.
+
+- Format picker over `EXPORT_FORMATS`; each format's `note` is displayed, because every one of them has a caveat and a caveat the operator reads beats one in a commit message.
+- Rig calibration (steps/mm, steps/deg ×2, nodal offset, head height, per-axis invert), scene units + up-axis, lens.
+- The AE pixels-per-metre row is shown **only** for the AE format — displaying it always would imply the other formats need it.
+- **Scale check**: a live readout of what the move actually covers (`slide −40.0 → 177.5 mm · travel 217.5 mm (0.217 m in scene)`). Reading this catches a factor-of-ten calibration error far more reliably than opening the exported file elsewhere does.
+
+## Timecode UI (v0.7 — ADR-0014)
+
+**Whole films cross IPC now**, not `(axes, durationMs)` tuples — one object in, one unit out, so the two processes cannot disagree about units. Every renderer time value is a frame number; `* 1000` in `renderer.js` is a bug by definition.
+
+- **Ruler** ticks step through a ladder built from the shooting rate (`1,2,5,10,r/2,r,2r,5r,…`) so ticks land on whole seconds. Labels print `MM:SS:FF`, or `SS:FF` when zoomed past a second — the hour never changes across a camera move, and printing it costs three characters that collide the labels. Full timecode lives in the playhead chip. Zoom floors at 8 frames across.
+- **Playhead** shows both `372f` and `01:00:15:12`; `tcOf(frame)` adds `film.startFrame`.
+- **Move panel:** Dur / Cue in frames with a timecode echo line beneath. Rate + Start TC moved to a **modal** (`TC` button in the panel header) — see the rail-budget note above; the rate is always visible as a status-bar chip instead.
+- **Inspector:** Frame + Pos on one row, editable absolute **TC** field + delete on the next. Typed TC subtracts `startFrame` to get the move-relative frame; a bad or drop-frame-skipped timecode surfaces the core's error message in the status line.
+- **Timebase change RETIMES** the move (`retimeFrames` on duration, cue, startFrame, every keyframe, playhead) so the rig does exactly what it did before over the same real seconds, then marks the upload stale. Keeping frame numbers instead would silently change a move already matched to a performance.
+- **Everything snaps to whole frames:** drag, capture (replace window = ±½ second of frames), arrow nudge (1 frame, ⇧ = 1 second). `MIN_GAP = 1` frame between neighbouring keys.
+- The browser-preview stub carries a **minimal non-drop `window.tc`** so `index.html` still opens standalone for design work. It is unreachable under Electron; never extend it into a second implementation.
 
 ## v0.6 UI additions
 

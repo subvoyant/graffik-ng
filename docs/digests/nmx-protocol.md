@@ -1,6 +1,6 @@
 # Digest: @graffik-ng/nmx-protocol
 
-**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-17 (v0.6) · 57 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
+**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-17 (v0.7.1) · 122 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
 
 ## packet.ts — codec
 
@@ -36,10 +36,37 @@ Namespaces returning `Packet`: `general` (sub 0), `motors` (1–3, `Motor = 1|2|
 - Progress IS animated for demo UX: each progress query (gen 123 / KF 123) advances `progressPerPoll` (20%); at 100% the run ends and (classic) positions land on stop points.
 - **Physics (v0.4):** `tick(dtMs)` integrates jogSpeeds→positions (only for enabled motors) — deterministic for tests; `startPhysics(intervalMs=50)`/`stopPhysics()` run it on a timer for the app's demo mode. Camera state tracked: `camEnabled/camExposures/camTriggerMs/camIntervalMs` (sub-addr 4 handler).
 
-## film.ts — move persistence (ADR-0010)
+## timecode.ts — timebase + SMPTE (ADR-0014)
 
-- `Film` schema: `{format:"graffik-ng-move", version:1, name, durationMs, startDelayMs, engine:"classic"|"keyframe", axes:[{axis:0|1|2, points:[{time,position,velocity?}]}], savedAt?, notes?}`.
-- `serializeFilm`/`deserializeFilm`/`validateFilm` — strict, human-readable errors (they surface in UI); refuses future versions; times strictly increasing and within 0..durationMs; ≥2 points/axis. `newFilm(name?, durationMs?)` = blank 3-axis document. Omitted `velocity` = auto-solve at upload time.
+- **The invariant:** frames are the authoring unit; ms exist only at the protocol boundary. If you write `* 1000` outside `film.ts`'s boundary helpers, stop.
+- `Timebase {num, den, dropFrame}` — **exact rationals**, never decimals (23.976 = 24000/1001; the rounded decimal drifts ~3.6 ms/1000 frames). `TIMEBASES` presets, `DEFAULT_TIMEBASE` = 24.
+- `nominalRate` = the integer timecode counts in (30 for 29.97) — NOT the real rate; that mismatch is why drop-frame exists. `fpsDecimal` is display-only.
+- Drop-frame legal **only** at 30000/1001 and 60000/1001 (`isDropFrameLegal`); `validateTimebase` throws otherwise. At 23.976 the correction is 14.4 frames/10 min — not whole — so no DF standard exists.
+- DF math is all integer: `drop = nominal/15` (2 or 4), `per10Min = nominal*600 − 9*drop`, `perMin = nominal*60 − drop`. Semicolon before frames marks a DF count.
+- `timecodeToFrames` **rejects** timecodes DF skips (`00:01:00;00`) — they do not exist, and accepting one hides a typo. Accepts `HH:MM:SS:FF`, `MM:SS:FF`, `SS:FF`, and a bare integer.
+- `retimeFrames(f, from, to)` preserves REAL TIME across a timebase change — the rig's behaviour is what must not move.
+
+## film.ts — move persistence (ADR-0010, ADR-0014, ADR-0016)
+
+- **v2 schema (frames):** `{format, version:2, name, timebase, durationFrames, cueFrames, startFrame, engine, axes:[{axis, points:[{frame,position,velocity?}]}], events?, savedAt?, notes?}`. `startFrame` = timecode of frame 0, so a move lines up with the camera.
+- **Protocol boundary — the only place ms appear:** `filmDurationMs`, `filmCueMs`, `filmAxesToMs`. Rounding is ≤0.5 ms on an absolute abscissa, so it cannot accumulate.
+- `migrateFilm` v1→v2 assumes **24 fps** (v1 carried no timebase), preserves real duration exactly, and writes the assumption into `notes` rather than hiding it.
+- Validation: whole-frame keyframes, strictly increasing, within 0..durationFrames, ≥2 points/axis, legal timebase. Errors are operator-facing sentences.
+- **Events (ADR-0016):** `FilmEvent {id, frame, durationFrames?, target, action, label?}`; `target` is a LOGICAL name so files stay portable between rigs. `buildCueList(film)` → device cue list in ms, sorted (Tier 2); `eventsInWindow(film, from, to)` → host dispatch, upper bound exclusive (Tier 1).
+
+## export3d.ts — 3D camera export (ADR-0015)
+
+- `sampleRig(film, calibration)` → one `RigPose {frame, slideMm, panDeg, tiltDeg}` **per frame**, via `computeVelocities`/`splineAt` — the same solver the controller runs (ADR-0009). Never write a second interpolation for export.
+- `RigCalibration` is **measured on the rig**, not guessed: `slideStepsPerMm`, `panStepsPerDeg`, `tiltStepsPerDeg`, per-axis inverts, `nodalOffsetMm` (tilt axis → entrance pupil; ignoring it is why CG slides against a plate on tilts), `headHeightMm`.
+- `exportUsda` — writes `metersPerUnit` + `upAxis` + `timeCodesPerSecond` explicitly (USD's own fallbacks are 0.01/Y). Exports the **mechanism** — Carriage(translate) → Pan(rotate about up) → Tilt(rotate X) → Camera(nodal offset) — not a flattened matrix.
+- `exportChan` — `frame tx ty tz rx ry rz vfov`, tilt in rx, pan in ry, rz always 0 (no roll axis). Carries no metadata at all, so the importing camera **must be set to YXZ rotation order** (Nuke defaults to ZXY).
+- `exportNukeScript` — a `Camera3` node with `rot_order YXZ` and baked `{curve x<start> …}` knobs. Carries its own rotation order and lens, so unlike `.chan` it cannot be imported wrong; prefer it whenever pasting is acceptable.
+- `exportAfterEffects` — AE "Keyframe Data" clipboard text. **AE has no real-world units** (its 3D space is pixels), so it needs an explicit `pixelsPerMeter` — a creative decision about world scale, made visible rather than buried in a constant. AE's Y points down and its camera looks down +Z, so the signs differ from the USD path deliberately.
+- `exportCsv` — one row per frame in steps AND mm/degrees AND scene units, so a unit mismatch is visible in one file.
+- `alembicConverterScript(usdaName)` — a Blender headless script (`blender --background --python …`) that turns the exported USD into `.abc` and `.fbx`. The honest bridge to Alembic rather than a native dependency.
+- `moveExtents(film, cal)` → per-axis `{min,max,range}` in mm/degrees. Drives the export dialog's scale check; a factor-of-ten calibration error shows up here before it reaches another application.
+- `EXPORT_FORMATS` — the export menu: `usda · abc · ae · nk · chan · csv`, each with an operator-facing `note`.
+- **No Alembic:** Ogawa has no maintained pure-JS writer; converting our USD downstream is one `usdcat` away and keeps the core dependency-free.
 
 ## limits.ts — soft travel limits (ADR-0013)
 

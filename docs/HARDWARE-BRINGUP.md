@@ -129,3 +129,91 @@ Fill in once, keep with the rig:
 If payload approaches the slider's rating, reduce speed *and* acceleration before
 anything else — inertia at the ends is what drops steps and, in the worst case,
 what throws a camera.
+
+---
+
+## Phase 6 — Rig calibration (required before any 3D export)
+
+The NMX reports **motor steps** and has no encoder. Nothing in the software can
+know how far a step moves the carriage: that is belt pitch, pulley diameter,
+gear ratio and microstepping — a property of your physical rig. Until these
+numbers are measured, a 3D export (ADR-0015) is a *shape*, not a camera move.
+
+Measure once per mechanical configuration, and re-measure after changing a belt,
+a pulley, a gearbox, or the driver's microstep setting.
+
+### 6.1 Slide — steps per millimetre
+
+1. Jog the carriage to one end of safe travel. Note the reported position, `p₀`.
+2. Mark the carriage against the rail with tape and a fine line.
+3. Jog roughly 400–600 mm along the rail. Mark again.
+4. Note the reported position, `p₁`. Measure the distance between the two marks
+   with a steel rule or tape — millimetres, read twice.
+
+```
+slideStepsPerMm = (p₁ − p₀) / distance_mm
+```
+
+Use the longest travel you can: the measurement error is fixed (~0.5 mm), so a
+500 mm baseline gives ten times the accuracy of a 50 mm one.
+
+### 6.2 Pan and tilt — steps per degree
+
+Rotation is harder to measure well than translation, and a 1% error over a 90°
+pan is nearly a degree of drift by the end of the move.
+
+1. Put a **digital inclinometer** on the head (for tilt) or use a printed
+   360° protractor taped under the pan axis with a pointer on the rotating part.
+2. Zero it. Note the reported position, `p₀`.
+3. Rotate as far as the rig allows — **90° or more**. Note `p₁` and the angle.
+
+```
+panStepsPerDeg  = (p₁ − p₀) / angle_deg
+tiltStepsPerDeg = (p₁ − p₀) / angle_deg
+```
+
+Cross-check: command a 45° move using the number you just derived and confirm
+the inclinometer agrees within a few tenths of a degree. If it does not, the
+error is usually microstepping (a factor of exactly 2, 4, 8 or 16) rather than
+a measurement mistake — look for the round number before re-measuring.
+
+### 6.3 Nodal offset
+
+Distance from the **tilt axis** to the lens's **entrance pupil**, along the lens
+axis, in millimetres. Positive means the pupil sits forward of the tilt axis.
+
+The quick method: mark two vertical objects at different distances that line up
+in frame. Tilt the head. If they stay lined up, the offset is zero; if they
+separate, the camera is swinging on an arc and the offset is non-zero. Slide the
+camera on its plate until they stop separating, then measure from the tilt axis
+to the pupil mark on the lens barrel.
+
+Getting this wrong is the classic reason a perfectly tracked CG element slides
+against the plate on a tilt.
+
+### 6.4 Head height
+
+Height of the pan axis above the rail, in millimetres. Pure scene placement —
+it does not affect the move, only where the exported rig sits in the 3D scene.
+
+### 6.5 Record it
+
+Write the values into the export dialog's calibration fields (they persist in
+preferences) **and** into this table, so a future session can tell whether the
+rig has been re-measured since:
+
+| Date | Slide steps/mm | Pan steps/deg | Tilt steps/deg | Nodal mm | Head mm | Measured by |
+|---|---|---|---|---|---|---|
+| _(pending first hardware session)_ | | | | | | |
+
+### 6.6 Verify the export end to end
+
+1. Build a short move that ends 200 mm along the rail and 45° panned.
+2. Export `.usda` with metres / Y-up.
+3. Open it in Blender (Z-up, metres — the importer will honour the stage
+   metadata) or Maya (Y-up, centimetres — export a second file at
+   `metersPerUnit = 0.01` if the import looks 100× off).
+4. Confirm the carriage travels 0.2 units and the pan reads 45°.
+
+If the scale is out by exactly 100, the unit setting is the culprit, not the
+calibration. If it is out by 2, 4, 8 or 16, it is microstepping.

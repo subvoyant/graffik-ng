@@ -136,7 +136,7 @@ input[type=text] { font-size: 11.5px; }
   font-size: 9.5px; font-weight: 600; letter-spacing: .11em; text-transform: uppercase;
   color: var(--ink-faint);
 }
-.panel > .body { padding: 8px 9px; display: flex; flex-direction: column; gap: 7px; }
+.panel > .body { padding: 7px 9px; display: flex; flex-direction: column; gap: 6px; }
 .row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
 /* ---------- axis rows ---------- */
@@ -171,6 +171,26 @@ input[type=text] { font-size: 11.5px; }
   padding: 2px 7px; border-radius: 9px;
   background: var(--bg-field); border: 1px solid var(--line);
   font-size: 10.5px; font-family: var(--mono);
+}
+.chip.dim { color: var(--ink-faint); }
+/* Read-only timecode echo beside a frame field — the frame count is the value
+   you edit, the timecode is the readback (ADR-0014). */
+.tcread {
+  font-family: var(--mono); font-size: 10px; font-variant-numeric: tabular-nums;
+  color: var(--ink-faint); letter-spacing: -.01em; line-height: 1;
+}
+.sheet .subhead {
+  font-size: 9.5px; font-weight: 600; letter-spacing: .11em; text-transform: uppercase;
+  color: var(--ink-faint); border-bottom: 1px solid var(--line); padding-bottom: 4px; margin-top: 4px;
+}
+.chk { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; color: var(--ink-dim); }
+.chk input { width: auto; cursor: pointer; }
+.extents {
+  font-family: var(--mono); font-size: 10.5px; font-variant-numeric: tabular-nums;
+  color: var(--ink-dim); background: var(--bg-field); border: 1px solid var(--line);
+  border-radius: var(--r); padding: 6px 8px; line-height: 1.6;
+  white-space: pre;              /* the columns are aligned with padding */
+  overflow-x: auto;
 }
 .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-faint); }
 .dot.on { background: var(--ok); box-shadow: 0 0 5px var(--ok); }
@@ -269,18 +289,24 @@ input[type=text] { font-size: 11.5px; }
     </section>
 
     <section class="panel">
-      <header>Move</header>
+      <header>Move <span class="grow"></span><button id="tbCfg" class="icon" style="font-size:9.5px;letter-spacing:.06em" title="Timebase &amp; start timecode">TC</button></header>
       <div class="body">
         <input id="moveName" type="text" value="Untitled Move" style="width:100%" />
         <div class="row">
-          <span class="field"><label>Dur</label><input id="tlDuration" class="num" type="number" value="30" min="2" max="600" data-unit="s" /></span>
-          <span class="field"><label>Cue</label><input id="tlCue" class="num" type="number" value="5" min="0" max="120" data-unit="s" /></span>
+          <span class="field"><label>Dur</label><input id="tlDuration" class="num" type="number" value="240" min="2" max="360000" data-unit="f" title="Move length in frames" /></span>
+          <span class="field"><label>Cue</label><input id="tlCue" class="num" type="number" value="120" min="0" max="7200" data-unit="f" title="Countdown before motion, in frames" /></span>
         </div>
         <div class="row">
-          <button id="tlNew">New</button>
-          <button id="tlLoad">Open…</button>
-          <button id="tlSave">Save…</button>
+          <span class="tcread" style="flex:1;font-size:9.5px"><span id="tlDurationTc">00:00:10:00</span> · cue <span id="tlCueTc">00:00:05:00</span></span>
+          <button id="tlExport" style="font-size:10.5px;padding:3px 8px" title="Export the move to a 3D package (⇧⌘E)">Export 3D…</button>
         </div>
+        <div class="row">
+          <button id="tlNew" title="New move (⌘N)">New</button>
+          <button id="tlLoad" title="Open a .graffik move (⌘O)">Open…</button>
+          <button id="tlSave" title="Save to the current file (⌘S)">Save</button>
+          <button id="tlSaveAs" title="Save to a new file (⇧⌘S)">As…</button>
+        </div>
+
       </div>
     </section>
 
@@ -291,10 +317,16 @@ input[type=text] { font-size: 11.5px; }
         <div id="kfFields" style="display:none;flex-direction:column;gap:6px">
           <div id="kfLabel" style="font-size:11px;color:var(--ink-dim)"></div>
           <div class="row">
-            <span class="field"><label>Time</label><input id="kfTime" class="num" type="number" step="0.1" data-unit="s" /></span>
+            <span class="field"><label>Frame</label><input id="kfTime" class="num" type="number" step="1" data-unit="f" /></span>
             <span class="field"><label>Pos</label><input id="kfPos" class="num" type="number" step="10" data-unit="steps" /></span>
           </div>
-          <button id="kfDelete">Delete key</button>
+          <div class="row">
+            <span class="field" style="flex:1"><label>TC</label>
+              <input id="kfTc" type="text" spellcheck="false" style="flex:1;min-width:0"
+                     title="Absolute timecode — includes the move's start TC" />
+            </span>
+            <button id="kfDelete" title="Delete this keyframe">✕</button>
+          </div>
         </div>
       </div>
     </section>
@@ -338,7 +370,8 @@ input[type=text] { font-size: 11.5px; }
         <button id="capPan" disabled>⏺ Pan</button>
         <button id="capTilt" disabled>⏺ Tilt</button>
         <span class="grow"></span>
-        <span id="playheadLabel" class="chip">0.0 s</span>
+        <span id="playheadFrameLabel" class="chip dim">0f</span>
+        <span id="playheadLabel" class="chip">00:00:00:00</span>
       </div>
 
       <canvas id="timeline"></canvas>
@@ -363,7 +396,7 @@ input[type=text] { font-size: 11.5px; }
         <div class="row">
           <button id="markStart" disabled>⏺ Mark START</button>
           <button id="markStop" disabled>⏺ Mark END</button>
-          <span class="field"><label>Dur</label><input id="travel" class="num" type="number" value="30" min="1" max="600" data-unit="s" /></span>
+          <span class="field"><label>Dur</label><input id="travel" class="num" type="number" value="240" min="1" max="360000" data-unit="f" title="Travel time in frames" /></span>
           <button id="arm" disabled>Arm</button>
           <button id="gotoStart" disabled>⏮</button>
           <button id="run" disabled>▶ Run</button>
@@ -378,6 +411,8 @@ input[type=text] { font-size: 11.5px; }
 <div class="statusbar">
   <span class="dot" id="connDot"></span>
   <span id="status">Not connected.</span>
+  <span id="tlFilePath" class="chip dim" title="This move has never been written to disk">not saved yet</span>
+  <span id="rateChip" class="chip dim" title="Shooting rate — set it in Move ⏱">24 fps</span>
   <span class="chip" id="modeChip">key-frame engine</span>
   <button id="helpBtn" class="icon" title="Keyboard shortcuts (?)">?</button>
 </div>
@@ -419,6 +454,98 @@ input[type=text] { font-size: 11.5px; }
 </div>
 
 <!-- ============ shortcuts ============ -->
+<div class="modal" id="exportModal">
+  <div class="sheet" style="width:620px">
+    <header>Export move to 3D <span class="grow"></span><button data-close>✕</button></header>
+    <div class="body">
+      <div class="row">
+        <span class="field" style="flex:1"><label>Format</label><select id="exFormat" style="flex:1"></select></span>
+      </div>
+      <div id="exNote" style="font-size:10.5px;color:var(--ink-faint);min-height:26px"></div>
+
+      <header class="subhead">Rig calibration — measured, not guessed</header>
+      <div class="row">
+        <span class="field"><label>Slide</label><input id="exSlideCal" class="num" type="number" step="0.01" min="0.0001" data-unit="steps/mm" /></span>
+        <span class="field"><label>Pan</label><input id="exPanCal" class="num" type="number" step="0.01" min="0.0001" data-unit="steps/°" /></span>
+        <span class="field"><label>Tilt</label><input id="exTiltCal" class="num" type="number" step="0.01" min="0.0001" data-unit="steps/°" /></span>
+      </div>
+      <div class="row">
+        <span class="field"><label>Nodal</label><input id="exNodal" class="num" type="number" step="1" data-unit="mm" title="Tilt axis to lens entrance pupil" /></span>
+        <span class="field"><label>Head h</label><input id="exHead" class="num" type="number" step="1" data-unit="mm" title="Pan axis above the rail" /></span>
+        <span class="grow"></span>
+        <label class="chk"><input type="checkbox" id="exInvSlide" /> inv slide</label>
+        <label class="chk"><input type="checkbox" id="exInvPan" /> inv pan</label>
+        <label class="chk"><input type="checkbox" id="exInvTilt" /> inv tilt</label>
+      </div>
+      <div style="font-size:10.5px;color:var(--ink-faint)">
+        The NMX reports motor steps and has no encoder, so these have to be measured on the rig —
+        <b>docs/HARDWARE-BRINGUP.md</b> Phase 6. A scale error of exactly ×100 is the unit setting below;
+        ×2/4/8/16 is microstepping.
+      </div>
+
+      <header class="subhead">Scene</header>
+      <div class="row">
+        <span class="field"><label>Units</label>
+          <select id="exUnits">
+            <option value="1">metres — Blender, Unreal, Unity</option>
+            <option value="0.01">centimetres — Maya, C4D, Houdini</option>
+          </select>
+        </span>
+        <span class="field"><label>Up</label>
+          <select id="exUp"><option value="Y">Y up — Maya, C4D</option><option value="Z">Z up — Blender, Houdini, Unreal</option></select>
+        </span>
+      </div>
+      <div class="row">
+        <span class="field"><label>Focal</label><input id="exFocal" class="num" type="number" step="1" min="1" data-unit="mm" /></span>
+        <span class="field"><label>Sensor</label><input id="exSensorW" class="num" type="number" step="0.01" data-unit="mm w" /></span>
+        <span class="field"><input id="exSensorH" class="num" type="number" step="0.01" data-unit="mm h" /></span>
+      </div>
+      <div class="row" id="exAeRow">
+        <span class="field"><label>AE px/m</label><input id="exPxPerM" class="num" type="number" step="10" min="1" data-unit="px" title="After Effects has no real-world units — this mapping is a creative choice" /></span>
+        <span class="field"><label>Comp</label><input id="exCompW" class="num" type="number" step="1" data-unit="w" /></span>
+        <span class="field"><input id="exCompH" class="num" type="number" step="1" data-unit="h" /></span>
+      </div>
+
+      <header class="subhead">Scale check — what this move actually covers</header>
+      <div id="exExtents" class="extents">—</div>
+
+      <div class="row">
+        <span class="grow"></span>
+        <button data-close>Cancel</button>
+        <button id="exGo" class="primary">Export…</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="tbModal">
+  <div class="sheet">
+    <header>Timebase &amp; start timecode <span class="grow"></span><button data-close>✕</button></header>
+    <div class="body">
+      <div class="row">
+        <span class="field" style="flex:1"><label>Shooting rate</label>
+          <select id="tlTimebase" style="flex:1"></select>
+        </span>
+      </div>
+      <div style="font-size:10.5px;color:var(--ink-faint)">
+        Changing the rate <b>retimes</b> the move: frame numbers are recomputed so the rig
+        does exactly what it did before, over the same real seconds. NTSC rates are exact
+        rationals (23.976 = 24000⁄1001), never the rounded decimal.
+      </div>
+      <div class="row">
+        <span class="field" style="flex:1"><label>Start TC</label>
+          <input id="tlStartTc" type="text" value="00:00:00:00" spellcheck="false" style="flex:1" />
+        </span>
+      </div>
+      <div style="font-size:10.5px;color:var(--ink-faint)">
+        Timecode of frame 0. Match it to the camera so a pass can be handed to editorial
+        or a 3D package without anyone recalculating offsets by hand.
+      </div>
+      <div class="row"><span class="grow"></span><span class="tcread" id="tbSummary"></span></div>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="helpModal">
   <div class="sheet">
     <header>Keyboard &amp; pointer <button class="close icon" data-close>✕</button></header>
