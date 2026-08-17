@@ -25,6 +25,9 @@ an Accepted ADR — write a superseding one.
 
 ## Practicalities
 
+Setup, the daily build/run loop, demo mode, packaging, and a troubleshooting
+table live in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
+
 - `packages/nmx-protocol`: `npm test` must be green (byte-exact protocol tests);
   `npx tsc --noEmit` must be clean. New commands need a provenance tag
   (`[S]`/`[F]`/`[R]`) and a test.

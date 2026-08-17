@@ -17,7 +17,8 @@ graffik-ng/
 │                              # camera trigger · pass log + cue countdown · save/load · fw gate
 │                              # `npm run dist` → unsigned .dmg (electron-builder)
 ├── .github/workflows/ci.yml   # test matrix (ubuntu+macos, `npm ci`) + unsigned dmg artifact on main
-└── docs/ adr/ (why, 0000-0011) + digests/ (how) — you are here
+└── docs/ adr/ (why, 0000-0011) + digests/ (how, you are here)
+    + DEVELOPMENT.md (human setup/daily-loop/troubleshooting) + images/ (README screenshot)
 ```
 
 Dataflow: renderer (vanilla JS UI) → `window.nmx` (preload contextBridge) → IPC → main process → `NmxClient` → `PortLike` (real `SerialPort` @19200 8N1, or `SimulatedNmx`) → NMX firmware, which **executes moves itself** (ADR-0005).
