@@ -8,3 +8,4 @@ export * from "./simulator.js";
 export * from "./film.js";
 export * from "./limits.js";
 export * from "./export3d.js";
+export * from "./trigger.js";

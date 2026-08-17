@@ -16,6 +16,7 @@ import {
   serializeFilm, deserializeFilm,
   filmAxesToMs, filmDurationMs, filmCueMs, msToFramesExact, framesToMs,
   EXPORT_FORMATS, DEFAULT_CALIBRATION, DEFAULT_LENS, moveExtents, alembicConverterScript,
+  buildCueList, SimulatedTriggerBackend, SerialTriggerBackend, SimulatedTriggerDevice, CueScheduler,
   NO_LIMITS, isTaught, jogWouldExceed, violationsForFilm, describeViolations,
 } from "@graffik-ng/nmx-protocol";
 
@@ -48,6 +49,15 @@ const DEFAULT_PREFS = {
   /* 3D export settings (ADR-0015). Calibration is a property of the RIG, so it
      belongs in preferences, not in the move file — the same move exported from
      a re-belted rig needs the new numbers, not the old ones. */
+  /* Logical target -> physical output (ADR-0016). Bindings are rig config, so
+     they live here rather than in the move file — a .graffik must survive being
+     carried to another rig. */
+  triggers: {
+    bindings: [
+      { target: "cue-light", backendId: "simulated", output: 1 },
+    ],
+    lastPort: null,
+  },
   export: {
     formatId: "usda",
     metersPerUnit: 1,
@@ -80,6 +90,10 @@ function loadPrefs() {
          else. Every sub-object gets a guard now; none of them may be trusted
          to have survived an older build. */
       recent: Array.isArray(raw.recent) ? raw.recent.filter((p) => typeof p === "string") : [],
+      triggers: {
+        ...DEFAULT_PREFS.triggers, ...(raw.triggers ?? {}),
+        bindings: Array.isArray(raw.triggers?.bindings) ? raw.triggers.bindings : [...DEFAULT_PREFS.triggers.bindings],
+      },
       export: {
         ...DEFAULT_PREFS.export, ...(raw.export ?? {}),
         calibration: { ...DEFAULT_CALIBRATION, ...(raw.export?.calibration ?? {}) },
@@ -124,6 +138,7 @@ async function connect(portPath) {
 
 async function disconnect() {
   stopJogMonitor();
+  stopCues();
   if (client) { try { await client.stopAll(); } catch { /* already gone */ } }
   if (port?.isOpen) await new Promise((r) => port.close(() => r()));
   sim?.stopPhysics();
@@ -461,8 +476,132 @@ ipcMain.handle("nmx:export-move", async (e, film, formatId, opts) => {
 
 /* ---------------- IPC: e-stop ---------------- */
 
+/* ---------------- triggers / cues (ADR-0016) ---------------- */
+
+/** @type {Map<string, import("@graffik-ng/nmx-protocol").TriggerBackend>} */
+const backends = new Map();
+/** @type {SerialPort | null} */ let trigPort = null;
+let scheduler = null, passClock = null, passStartedAt = 0;
+
+const binding = (target) => prefs.triggers.bindings.find((b) => b.target === target);
+const backendFor = (id) => backends.get(id);
+
+function ensureScheduler(win) {
+  if (!scheduler) {
+    scheduler = new CueScheduler(binding, backendFor, (msg) => win?.webContents.send("nmx:cue-problem", msg));
+  }
+  return scheduler;
+}
+
+/** The simulated backend is always present, so cues are testable with nothing attached. */
+backends.set("simulated", new SimulatedTriggerBackend({ tier: 1 }));
+
+ipcMain.handle("nmx:trigger-backends", () =>
+  [...backends.values()].map((b) => ({ id: b.id, tier: b.tier, outputs: b.outputs(), describe: b.describe() })));
+
+ipcMain.handle("nmx:trigger-connect", async (e, portPath) => {
+  await closeTriggerPort();
+  const dev = portPath === SIM_PORT ? new SimulatedTriggerDevice() : null;
+  if (!dev) {
+    trigPort = new SerialPort({ path: portPath, baudRate: 115200, autoOpen: false });
+    await new Promise((res, rej) => trigPort.open((err) => (err ? rej(err) : res())));
+  }
+  const be = new SerialTriggerBackend(dev ?? trigPort);
+  const info = await be.hello();
+  be.onFired = (id, deviceMs) => BrowserWindow.fromWebContents(e.sender)?.webContents.send("nmx:cue-fired", { id, deviceMs });
+  be.onInput = (n, edge, deviceMs) => BrowserWindow.fromWebContents(e.sender)?.webContents.send("nmx:trigger-input", { n, edge, deviceMs });
+  backends.set("serial", be);
+  prefs.triggers.lastPort = portPath; savePrefs();
+  return { ...info, tier: be.tier };
+});
+
+async function closeTriggerPort() {
+  const be = backends.get("serial");
+  if (be) { try { await be.abort(); await be.close(); } catch { /* going away anyway */ } }
+  backends.delete("serial");
+  if (trigPort?.isOpen) await new Promise((r) => trigPort.close(() => r()));
+  trigPort = null;
+}
+ipcMain.handle("nmx:trigger-disconnect", () => closeTriggerPort());
+
+ipcMain.handle("nmx:get-bindings", () => prefs.triggers.bindings);
+ipcMain.handle("nmx:set-bindings", (_e, bindings) => {
+  prefs.triggers.bindings = Array.isArray(bindings) ? bindings : [];
+  savePrefs();
+  return prefs.triggers.bindings;
+});
+
+/** Pre-flight: which cues cannot be delivered, checked before the pass runs. */
+ipcMain.handle("nmx:cue-check", (e, film) => {
+  const s = ensureScheduler(BrowserWindow.fromWebContents(e.sender));
+  s.load(buildCueList(film));
+  const serial = backends.get("serial");
+  return {
+    total: (film.events ?? []).length,
+    unroutable: s.unroutable().map((u) => ({ id: u.cue.id, target: u.cue.target, reason: u.reason })),
+    tier: serial ? serial.tier : 1,
+    device: serial ? serial.describe() : null,
+  };
+});
+
+/**
+ * Arm cues for a pass. With a Tier-2 device the whole list is uploaded now and
+ * the device runs it off its own clock; otherwise the host schedules them and
+ * the caller is told, so the UI can say which it got.
+ */
+ipcMain.handle("nmx:cues-arm", async (e, film) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  const cues = buildCueList(film);
+  const s = ensureScheduler(win);
+  s.load(cues);
+  const serial = backends.get("serial");
+  if (serial && serial.tier === 2) {
+    const routed = cues
+      .map((cue) => ({ cue, b: binding(cue.target) }))
+      .filter((x) => x.b && x.b.backendId === "serial")
+      .map((x) => ({ cue: x.cue, output: x.b.output }));
+    const accepted = await serial.arm(routed);
+    return { tier: 2, armed: accepted, hostScheduled: cues.length - routed.length };
+  }
+  return { tier: 1, armed: cues.length, hostScheduled: cues.length };
+});
+
+/** Called by the renderer the instant the move starts, so t=0 is the same t=0. */
+ipcMain.handle("nmx:cues-start", async () => {
+  const serial = backends.get("serial");
+  if (serial && serial.tier === 2) await serial.start();
+  if (!scheduler) return { running: false };
+  scheduler.start();
+  passStartedAt = Date.now();
+  clearInterval(passClock);
+  // 10 ms is well inside the ±20 ms Tier-1 jitter this cannot fix; a faster
+  // poll would only make the number look better without making it truer.
+  passClock = setInterval(() => scheduler.advanceTo(Date.now() - passStartedAt), 10);
+  return { running: true };
+});
+
+function stopCues() {
+  clearInterval(passClock); passClock = null;
+  scheduler?.stop();
+}
+ipcMain.handle("nmx:cues-stop", async () => { stopCues(); return scheduler?.worstJitterMs() ?? 0; });
+
+ipcMain.handle("nmx:cue-test", async (_e, target, action) => {
+  const b = binding(target);
+  if (!b) throw new Error(`"${target}" is not bound to an output`);
+  const be = backendFor(b.backendId);
+  if (!be) throw new Error(`backend "${b.backendId}" is not connected`);
+  await be.fire({ id: "test", atMs: 0, target, action }, b.output);
+});
+
 ipcMain.handle("nmx:stop-all", async () => {
   stopJogMonitor();
+  /* An armed cue list is state on a device the motion e-stop does not reach
+     (ADR-0016). Cancel it FIRST and independently of the NMX: if the serial
+     link to the controller is the thing that has failed, the cue that is about
+     to fire is still ours to stop. */
+  stopCues();
+  for (const be of backends.values()) { try { await be.abort(); } catch { /* best effort */ } }
   if (client) await client.stopAll();
 });
 

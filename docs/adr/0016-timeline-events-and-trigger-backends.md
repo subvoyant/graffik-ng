@@ -1,6 +1,6 @@
 # ADR-0016: Timeline events, and where they are scheduled
 
-**Status:** Accepted (schema + scheduler landed; backends staged)
+**Status:** Accepted (schema, scheduler, simulated + serial backends, reference firmware and UI all landed v0.8; DMX/OSC/MIDI still staged)
 **Date:** 2026-08-17
 **Deciders:** Project owner + Claude
 
@@ -132,11 +132,22 @@ in the UI. Costs an abstraction, buys honesty about which events are frame-exact
   will not silently lose its cue list to a later version.
 - Events retime with the move when the timebase changes, and are validated
   against the move's duration like keyframes.
-- Tier 2 requires firmware we have not written and a board we do not have. The
-  protocol above is the contract that firmware will be written against; until a
-  device answers `HELLO`, only Tier 1 exists and the UI must say so.
-- A simulated backend is required before any real one, so cue lists are
-  verifiable without hardware — same discipline as `SimulatedNmx`.
-- Safety: an armed cue list is state on a device the e-stop does not currently
-  reach. `ABORT` must be wired into `stopAll()` before any Tier-2 output drives
-  anything that moves.
+- Tier 2 requires firmware. It is now written: `firmware/graffik-trig/` is a
+  reference Arduino sketch implementing the protocol above, with non-blocking
+  pulses (a `delay()` inside a cue would make every later cue late, which is the
+  exact failure this board exists to prevent) and GPI edge reporting. Until a
+  device answers `HELLO`, only Tier 1 exists and the UI says so on a chip.
+- A simulated backend came first, so cue lists are verifiable without hardware —
+  same discipline as `SimulatedNmx`. `SimulatedTriggerDevice` also implements
+  the *device* side over `PortLike`, so the serial backend is tested end to end
+  including the device-clock timing that is the whole point of Tier 2.
+- **Safety, now closed:** `stopAll()` cancels cues **first and independently of
+  the NMX** — if the link to the controller is the thing that has failed, the
+  cue about to fire is still ours to stop.
+- The scheduler **fires a late cue rather than dropping it**: a missed cue light
+  is invisible, a late one is at least explicable. It also reports
+  `worstJitterMs()`, so the Tier-1 caveat is a measured number rather than a
+  claim in a document.
+- Cues are pre-flighted before a pass. A cue that cannot be routed aborts the
+  run *before* the performer is in position, rather than being discovered
+  afterwards in a log.

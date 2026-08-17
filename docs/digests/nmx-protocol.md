@@ -1,6 +1,6 @@
 # Digest: @graffik-ng/nmx-protocol
 
-**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-17 (v0.7.1) · 122 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
+**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-17 (v0.8) · 159 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
 
 ## packet.ts — codec
 
@@ -73,6 +73,17 @@ Namespaces returning `Packet`: `general` (sub 0), `motors` (1–3, `Motor = 1|2|
 - `AxisLimit {min|null, max|null}`, `Limits` = 3-tuple, `NO_LIMITS`. Untaught bounds never block.
 - `withinLimit` / `clampToLimit` / `isTaught`; **`jogWouldExceed(l,pos,stepsPerSec,lookaheadMs=250)`** projects forward and is direction-aware — motion *away* from a violated bound is always permitted so a rig parked outside limits stays recoverable.
 - `violationsForFilm(film, limits)` → `LimitViolation[]` (axis, keyIndex, position, bound, limit); `describeViolations()` renders the operator-facing sentence. Called before any upload packet is sent.
+
+## trigger.ts — cue backends + scheduler (ADR-0016)
+
+- **The rule:** anything that must be identical between passes cannot be timed by the host. Backends declare `tier`; the UI must show it.
+- `TriggerBackend` seam: `describe/outputs/supports/fire/arm/start/abort/close`. Same idea as `PortLike` — a real device and a fake one are interchangeable.
+- `SimulatedTriggerBackend` records what would have fired (tier configurable). Its `firedAtMs === atMs` **by definition** — never read that as evidence that real hardware has no jitter.
+- `SerialTriggerBackend` speaks **GRAFFIK-TRIG v1** over any `PortLike`. Handshake **refuses an unknown protocol version** rather than guessing a command set — the ADR-0004 trap, applied to a second device. Cue ids are strings in the move but integers on the wire (a microcontroller should not parse names); the map is reversed when the device reports back. `arm()` **refuses a partial list**. `abort()` is deliberately fire-and-forget: the e-stop path must not hang waiting on the device that may be what went wrong.
+- `SimulatedTriggerDevice` implements the **device** side over `PortLike`, with `tick(dtMs)` driving its own clock and `input(n, edge)` faking a GPI edge — so Tier-2 timing is tested end to end without a board.
+- `CueScheduler` (Tier 1) takes **injected time** (`advanceTo(elapsedMs)`), so it is deterministic under test and timer-driven in the app. It **fires late cues rather than dropping them** (a missed cue light is invisible; a late one is explicable), survives one cue throwing, and exposes `worstJitterMs()` — the Tier-1 caveat as a measured number. `unroutable()` reports undeliverable cues **before** the pass.
+- `actionToWire` covers `pulse`/`level`/`dmx`; `camera`/`midi`/`osc` return null and are skipped rather than sent as garbage. Levels are clamped to 0–255.
+- ASCII encode/decode is hand-rolled — the core has zero deps and must typecheck without Node or DOM lib types, so no `Buffer`, no `TextEncoder`.
 
 ## Gotchas
 

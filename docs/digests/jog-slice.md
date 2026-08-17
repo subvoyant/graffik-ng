@@ -1,6 +1,6 @@
 # Digest: apps/jog-slice (Electron app)
 
-**Verified against** `apps/jog-slice/*` @ 2026-08-17 (v0.7.1) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
+**Verified against** `apps/jog-slice/*` @ 2026-08-17 (v0.8) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
 
 ## Shape
 
@@ -58,7 +58,15 @@ Teaching: `nmx:set-limit-here (motor, "min"|"max")` queries live position and st
 | nmx:export-move | film, formatId, opts | writes the file; for `abc` also writes the Blender converter script beside it; returns `{written[], format}` |
 | nmx:move-extents | film, calibration | pre-flight scale check: per-axis min/max/range in mm and degrees |
 | nmx:cam-arm / cam-fire / cam-disable | cfg{triggerMs,focusMs,delayMs,maxShots,intervalMs} / — / — | sub-addr 4; arm = enable + params; fire = exposeNow |
-| nmx:stop-all | — | E-STOP; bypasses queue |
+| nmx:trigger-backends | — | `[{id,tier,outputs,describe}]`; the simulated backend is always present |
+| nmx:trigger-connect / -disconnect | portPath / — | 115200 baud; `hello()` handshake; returns `{name,protocol,outputs,inputs,tier}` |
+| nmx:get-bindings / set-bindings | — / bindings[] | logical target → `{backendId, output}`; rig config, lives in prefs |
+| nmx:cue-check | film | pre-flight: `{total, unroutable[{id,target,reason}], tier, device}` |
+| nmx:cues-arm | film | tier 2 → uploads the list to the device; tier 1 → loads the host scheduler. Returns which you got |
+| nmx:cues-start / cues-stop | — | start with the move; stop returns `worstJitterMs()` |
+| nmx:cue-test | target, action | fire one cue now, for checking wiring |
+| **events** nmx:cue-fired / cue-problem / trigger-input | … | device fire reports (device clock), scheduler problems, GPI edges |
+| nmx:stop-all | — | E-STOP; **aborts every backend FIRST**, independently of the NMX (ADR-0016), then broadcast stop |
 
 ## renderer.js facts
 
@@ -90,6 +98,15 @@ Layout is a fixed frame — appbar / rail(244px) / stage / statusbar — with **
 - **Timeline zoom/pan:** `view {t0,t1}` is the visible window. Wheel = zoom about cursor (clamped 400ms…4× duration), ⇧wheel or middle-drag = pan, `F`/`Home` or ⤢ = frame all, drift clamped to ±25% of duration. Ruler ticks auto-step through a nice-number ladder; zoom % shown in the panel header.
 - **Keyframes are diamonds** (animation-software convention), white ring when selected.
 - Space = run pass. Live position readout polls every 400ms while connected.
+
+## Cue lane (v0.8 — ADR-0016)
+
+- **Canvas geometry:** `RULER(20) → CUE_LANE(22) → three tracks`. `tracksTop()` is the single place that offset is computed; grid lines and track rects both derive from it. Cues sit **above** the axes because they belong to the move, not to an axis.
+- Markers are frame-snapped flags; a cue with `durationFrames` also draws a bar, so "light on for 12 frames" reads as duration rather than an instant. Label falls back to the target name.
+- Click to select, drag to move (clamped so a sustained cue cannot run past the end), double-click or ⌫ to delete, `C` adds one at the playhead, ⌥← / ⌥→ nudges by a frame (⇧ = a second).
+- **The inspector is context-sensitive:** `selection = {kind:"key"|"cue", …}`. One rail panel serves both, which is both the 3D-app idiom and the only way it fits the height budget. Every `selection.track` read must guard on `kind === "key"`.
+- **Pass flow:** `armCuesForPass()` pre-flights via `cue-check` and **aborts the pass** if any cue is unroutable — found before the performer is in position, not afterwards in a log. Then `cues-arm`, and `cues-start` fires at the same instant the move does (the countdown precedes both, so t=0 means the same thing on both sides).
+- **⚡ Cues… modal:** device connect + target bindings table with per-row test-fire, and a tier chip that turns green only on a real Tier-2 device. The tier explanation is in the dialog, not just the ADR.
 
 ## Move files vs. export (v0.7.1)
 

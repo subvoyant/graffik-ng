@@ -183,6 +183,9 @@ input[type=text] { font-size: 11.5px; }
   font-size: 9.5px; font-weight: 600; letter-spacing: .11em; text-transform: uppercase;
   color: var(--ink-faint); border-bottom: 1px solid var(--line); padding-bottom: 4px; margin-top: 4px;
 }
+.bind { display: grid; grid-template-columns: 1fr 92px 58px 26px 26px; gap: 5px; align-items: center; margin: 3px 0; }
+.bind input, .bind select { font-size: 10.5px; padding: 3px 5px; }
+.chip.tier2 { color: var(--ok); border-color: #2c4a3e; }
 .chk { display: inline-flex; align-items: center; gap: 4px; font-size: 10.5px; color: var(--ink-dim); }
 .chk input { width: auto; cursor: pointer; }
 .extents {
@@ -311,9 +314,9 @@ input[type=text] { font-size: 11.5px; }
     </section>
 
     <section class="panel">
-      <header>Selected key</header>
+      <header>Selected</header>
       <div class="body" id="kfInspector">
-        <div style="font-size:10.5px;color:var(--ink-faint)" id="kfEmpty">No keyframe selected</div>
+        <div style="font-size:10.5px;color:var(--ink-faint)" id="kfEmpty">Nothing selected</div>
         <div id="kfFields" style="display:none;flex-direction:column;gap:6px">
           <div id="kfLabel" style="font-size:11px;color:var(--ink-dim)"></div>
           <div class="row">
@@ -326,6 +329,36 @@ input[type=text] { font-size: 11.5px; }
                      title="Absolute timecode — includes the move's start TC" />
             </span>
             <button id="kfDelete" title="Delete this keyframe">✕</button>
+          </div>
+        </div>
+
+        <div id="cueFields" style="display:none;flex-direction:column;gap:6px">
+          <div id="cueLabel" style="font-size:11px;color:var(--ink-dim)"></div>
+          <div class="row">
+            <span class="field"><label>Frame</label><input id="cueFrame" class="num" type="number" step="1" data-unit="f" /></span>
+            <span class="tcread" id="cueTc"></span>
+          </div>
+          <div class="row">
+            <span class="field" style="flex:1"><label>Target</label>
+              <input id="cueTarget" type="text" spellcheck="false" style="flex:1;min-width:0"
+                     title="Logical output name — bound to hardware in ⚡ Cues…" />
+            </span>
+          </div>
+          <div class="row">
+            <span class="field"><label>Do</label>
+              <select id="cueKind">
+                <option value="pulse">pulse</option>
+                <option value="level">level</option>
+                <option value="dmx">DMX</option>
+                <option value="camera">camera</option>
+              </select>
+            </span>
+            <input id="cueArgA" class="num" type="number" step="1" style="width:52px" />
+            <input id="cueArgB" class="num" type="number" step="1" style="width:52px" />
+          </div>
+          <div class="row">
+            <button id="cueTest" style="flex:1" title="Fire this cue now">Test</button>
+            <button id="cueDelete" title="Delete this cue">✕</button>
           </div>
         </div>
       </div>
@@ -369,6 +402,8 @@ input[type=text] { font-size: 11.5px; }
         <button id="capSlide" disabled>⏺ Slide</button>
         <button id="capPan" disabled>⏺ Pan</button>
         <button id="capTilt" disabled>⏺ Tilt</button>
+        <button id="cueAdd" title="Add a cue at the playhead (C)">+ Cue</button>
+        <button id="cueCfg" title="Trigger device and target bindings">⚡ Cues…</button>
         <span class="grow"></span>
         <span id="playheadFrameLabel" class="chip dim">0f</span>
         <span id="playheadLabel" class="chip">00:00:00:00</span>
@@ -454,6 +489,41 @@ input[type=text] { font-size: 11.5px; }
 </div>
 
 <!-- ============ shortcuts ============ -->
+<div class="modal" id="cueModal">
+  <div class="sheet" style="width:600px">
+    <header>Cue outputs &amp; trigger device <span class="grow"></span><button data-close>✕</button></header>
+    <div class="body">
+      <div class="row">
+        <span class="field" style="flex:1;min-width:0"><label>Device</label><select id="cuePort" style="flex:1;min-width:0"></select></span>
+        <button id="cuePortRefresh" class="icon" title="Rescan ports">⟳</button>
+        <button id="cueConnect">Connect</button>
+        <button id="cueDisconnect" disabled>Disconnect</button>
+      </div>
+      <div class="row">
+        <span id="cueTierChip" class="chip dim">tier 1 — host-scheduled</span>
+        <span id="cueDeviceLabel" style="font-size:10.5px;color:var(--ink-faint)">no trigger device</span>
+      </div>
+      <div style="font-size:10.5px;color:var(--ink-faint)">
+        <b>Tier 1</b> fires cues from this computer: roughly ±20 ms and <b>not repeatable</b> between
+        passes — fine for a cue light, not for anything the audience will see A/B'd in a composite.
+        <b>Tier 2</b> uploads the whole cue list to the device, which runs it off its own clock from a
+        single GO. Reference firmware: <b>firmware/graffik-trig/</b>.
+      </div>
+
+      <header class="subhead">Target bindings</header>
+      <div id="cueBindings"></div>
+      <div class="row">
+        <input id="cueNewTarget" type="text" placeholder="new target name" style="flex:1" spellcheck="false" />
+        <button id="cueAddBinding">Add</button>
+      </div>
+      <div style="font-size:10.5px;color:var(--ink-faint)">
+        Moves reference targets by <b>name</b>, never by port and channel, so a <code>.graffik</code>
+        stays portable between rigs. The mapping below is rig configuration and lives in preferences.
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="exportModal">
   <div class="sheet" style="width:620px">
     <header>Export move to 3D <span class="grow"></span><button data-close>✕</button></header>

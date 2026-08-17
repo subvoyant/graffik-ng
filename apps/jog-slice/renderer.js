@@ -114,6 +114,17 @@ if (!window.nmx) {
     setLimitHere: async () => [{min:null,max:null},{min:null,max:null},{min:null,max:null}],
     clearLimits: async () => [{min:null,max:null},{min:null,max:null},{min:null,max:null}],
     onLimitHit: () => {},
+    triggerBackends: async () => [{ id: "simulated", tier: 1, outputs: 8, describe: "Simulated trigger device — 8 outputs, tier 1" }],
+    triggerConnect: async () => ({ name: "sim-trig", protocol: 1, outputs: 8, inputs: 2, tier: 2 }),
+    triggerDisconnect: async () => {},
+    getBindings: async () => [{ target: "cue-light", backendId: "simulated", output: 1 }],
+    setBindings: async (b) => b,
+    cueCheck: async (f) => ({ total: (f.events ?? []).length, unroutable: [], tier: 1, device: null }),
+    cuesArm: async (f) => ({ tier: 1, armed: (f.events ?? []).length, hostScheduled: (f.events ?? []).length }),
+    cuesStart: async () => ({ running: true }),
+    cuesStop: async () => 0,
+    cueTest: async () => {},
+    onCueFired: () => {}, onCueProblem: () => {}, onTriggerInput: () => {},
   };
 }
 
@@ -471,11 +482,15 @@ function countdown(sec) {
 
 /* ================= timeline ================= */
 const cv = $("timeline"), ctx = cv.getContext("2d");
-const RULER = 20, PAD_L = 40, PAD_R = 12;
+const RULER = 20, PAD_L = 40, PAD_R = 12, CUE_LANE = 22;
 
+/** The cue lane sits directly under the ruler: cues are timeline events, and
+    putting them above the axes says they belong to the move, not to an axis. */
+const cueRect = () => ({ x: PAD_L, y: RULER, w: cv.clientWidth - PAD_L - PAD_R, h: CUE_LANE });
+const tracksTop = () => RULER + CUE_LANE;
 const trackRect = (i) => {
-  const h = (cv.clientHeight - RULER) / 3;
-  return { x: PAD_L, y: RULER + i * h + 6, w: cv.clientWidth - PAD_L - PAD_R, h: h - 12 };
+  const h = (cv.clientHeight - tracksTop()) / 3;
+  return { x: PAD_L, y: tracksTop() + i * h + 6, w: cv.clientWidth - PAD_L - PAD_R, h: h - 12 };
 };
 const fToX = (f, r) => r.x + ((f - view.f0) / (view.f1 - view.f0)) * r.w;
 const xToF = (x, r) => view.f0 + ((x - r.x) / r.w) * (view.f1 - view.f0);
@@ -546,7 +561,44 @@ function render() {
     /* Drop the label rather than let the last tick render clipped at the edge. */
     if (x + 3 + ctx.measureText(label).width <= rTop.x + rTop.w) ctx.fillText(label, x + 3, RULER / 2 - 1);
     /* vertical grid down the tracks */
-    ctx.fillStyle = "#1b1f23"; ctx.fillRect(x, RULER, 1, h - RULER); ctx.fillStyle = INK_FAINT;
+    ctx.fillStyle = "#1b1f23"; ctx.fillRect(x, tracksTop(), 1, h - tracksTop()); ctx.fillStyle = INK_FAINT;
+  }
+
+  /* cue lane (ADR-0016) */
+  {
+    const r = cueRect();
+    ctx.fillStyle = "#15181b"; ctx.fillRect(r.x, r.y, r.w, r.h);
+    ctx.strokeStyle = LINE; ctx.beginPath();
+    ctx.moveTo(r.x, r.y + r.h + .5); ctx.lineTo(r.x + r.w, r.y + r.h + .5); ctx.stroke();
+    ctx.save(); ctx.translate(13, r.y + r.h / 2); ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = "center"; ctx.fillStyle = INK_FAINT; ctx.font = "600 9px system-ui";
+    ctx.fillText("CUES", 0, 0); ctx.restore(); ctx.textAlign = "left";
+
+    ctx.save(); ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
+    for (const ev of film.events ?? []) {
+      if (ev.frame < view.f0 - 8 || ev.frame > view.f1 + 8) continue;
+      const x = fToX(ev.frame, r);
+      const sel = selection?.kind === "cue" && selection.id === ev.id;
+      /* Sustained cues get a bar so "light on for 12 frames" reads as duration
+         rather than as an instant. */
+      if (ev.durationFrames) {
+        const x2 = fToX(ev.frame + ev.durationFrames, r);
+        ctx.fillStyle = "rgba(201,133,0,.28)";
+        ctx.fillRect(x, r.y + 5, Math.max(2, x2 - x), r.h - 10);
+      }
+      ctx.fillStyle = sel ? "#ffffff" : "#c98500";
+      ctx.beginPath();
+      ctx.moveTo(x, r.y + 4); ctx.lineTo(x + 4, r.y + 9);
+      ctx.lineTo(x + 4, r.y + r.h - 4); ctx.lineTo(x - 4, r.y + r.h - 4);
+      ctx.lineTo(x - 4, r.y + 9); ctx.closePath(); ctx.fill();
+      const label = ev.label || ev.target;
+      if (label) {
+        ctx.fillStyle = sel ? INK : INK_FAINT;
+        ctx.font = "9px ui-monospace, Menlo, monospace";
+        ctx.fillText(label, x + 7, r.y + r.h / 2);
+      }
+    }
+    ctx.restore();
   }
 
   /* tracks */
@@ -605,7 +657,7 @@ function render() {
     film.axes[i].points.forEach((p, k) => {
       if (p.frame < view.f0 - 8 || p.frame > view.f1 + 8) return;
       const x = fToX(p.frame, r), y = posToY(p.position, r, s);
-      const sel = selection && selection.track === i && selection.k === k;
+      const sel = selection?.kind === "key" && selection.track === i && selection.k === k;
       const R = sel ? 6 : 4.5;
       ctx.beginPath();
       ctx.moveTo(x, y - R); ctx.lineTo(x + R, y); ctx.lineTo(x, y + R); ctx.lineTo(x - R, y); ctx.closePath();
@@ -679,13 +731,31 @@ function hit(mx, my) {
   }
   return null;
 }
+/** A cue marker under the pointer, if any. */
+function hitCue(mx, my) {
+  const r = cueRect();
+  if (my < r.y || my > r.y + r.h) return null;
+  for (const ev of film.events ?? []) {
+    if (Math.abs(fToX(ev.frame, r) - mx) < 7) return ev;
+  }
+  return null;
+}
+
 cv.addEventListener("pointerdown", (e) => {
   const b = cv.getBoundingClientRect(), mx = e.clientX - b.left, my = e.clientY - b.top;
   cv.setPointerCapture(e.pointerId);
   if (e.button === 1) { drag = { type: "pan", x: mx }; return; }
   if (my <= RULER) { drag = { type: "ph" }; movePlayhead(mx); return; }
+  const cueR = cueRect();
+  if (my >= cueR.y && my <= cueR.y + cueR.h) {
+    const ev = hitCue(mx, my);
+    if (ev) { snapshot(); selection = { kind: "cue", id: ev.id }; drag = { type: "cue", id: ev.id }; }
+    else selection = null;
+    updateInspector(); render();
+    return;
+  }
   const h = hit(mx, my);
-  if (h) { snapshot(); selection = { track: h.track, k: h.k }; drag = { type: "kf", ...h }; }
+  if (h) { snapshot(); selection = { kind: "key", track: h.track, k: h.k }; drag = { type: "kf", ...h }; }
   else selection = null;
   updateInspector(); render();
 });
@@ -697,6 +767,14 @@ cv.addEventListener("pointermove", (e) => {
     const r = { x: PAD_L, w: cv.clientWidth - PAD_L - PAD_R };
     const d = ((drag.x - mx) / r.w) * (view.f1 - view.f0);
     view.f0 += d; view.f1 += d; drag.x = mx; return render();
+  }
+  if (drag.type === "cue") {
+    const ev = (film.events ?? []).find((x) => x.id === drag.id);
+    if (ev) {
+      const f = Math.max(0, Math.min(film.durationFrames - (ev.durationFrames ?? 0), xToFrame(mx, cueRect())));
+      ev.frame = f; updateInspector(); render();
+    }
+    return;
   }
   const { track, k, r, s } = drag, pts = film.axes[track].points;
   pts[k].position = Math.round(yToPos(my, r, s));
@@ -710,8 +788,10 @@ cv.addEventListener("pointermove", (e) => {
 });
 cv.addEventListener("pointerup", () => { drag = null; });
 cv.addEventListener("dblclick", (e) => {
-  const b = cv.getBoundingClientRect();
-  const h = hit(e.clientX - b.left, e.clientY - b.top);
+  const b = cv.getBoundingClientRect(), mx = e.clientX - b.left, my = e.clientY - b.top;
+  const ev = hitCue(mx, my);
+  if (ev) return delCue(ev.id);
+  const h = hit(mx, my);
   if (h) delKey(h.track, h.k);
 });
 function movePlayhead(mx) {
@@ -728,7 +808,9 @@ function delKey(track, k) {
 
 /* ---------------- inspector ---------------- */
 function updateInspector() {
-  const p = selection && film.axes[selection.track].points[selection.k];
+  if (selection?.kind === "cue") return updateCueInspector();
+  $("cueFields").style.display = "none";
+  const p = selection?.kind === "key" && film.axes[selection.track].points[selection.k];
   if (!p) { $("kfEmpty").style.display = ""; $("kfFields").style.display = "none"; selection = null; return; }
   $("kfEmpty").style.display = "none"; $("kfFields").style.display = "flex";
   const pts = film.axes[selection.track].points;
@@ -748,9 +830,9 @@ function setKeyFrameNumber(frame) {
   pts[k].frame = Math.max(pts[k - 1].frame + MIN_GAP, Math.min(pts[k + 1].frame - MIN_GAP, Math.round(frame)));
   updateInspector(); refreshPreview();
 }
-$("kfTime").onchange = () => { if (selection) setKeyFrameNumber(Number($("kfTime").value)); };
+$("kfTime").onchange = () => { if (selection?.kind === "key") setKeyFrameNumber(Number($("kfTime").value)); };
 $("kfTc").onchange = () => {
-  if (!selection) return;
+  if (selection?.kind !== "key") return;
   try {
     /* Typed timecode is absolute (it includes the move's start TC), so subtract
        the start to get a frame offset within the move. */
@@ -758,12 +840,190 @@ $("kfTc").onchange = () => {
   } catch (err) { status(err.message); updateInspector(); }
 };
 $("kfPos").onchange = () => {
-  if (!selection) return;
+  if (selection?.kind !== "key") return;
   snapshot();
   film.axes[selection.track].points[selection.k].position = Math.round(Number($("kfPos").value));
   refreshPreview();
 };
-$("kfDelete").onclick = () => selection && delKey(selection.track, selection.k);
+$("kfDelete").onclick = () => selection?.kind === "key" && delKey(selection.track, selection.k);
+
+/* ---------------- cues (ADR-0016) ---------------- */
+
+/**
+ * Pre-flight the cue list and arm it. Returns false to abort the pass — a cue
+ * that cannot be delivered is found BEFORE the performer is in position, not
+ * discovered afterwards from a log.
+ */
+async function armCuesForPass() {
+  const n = (film.events ?? []).length;
+  if (!n) return true;
+  try {
+    const check = await window.nmx.cueCheck(film);
+    if (check.unroutable.length) {
+      const first = check.unroutable[0];
+      status(`Cue “${first.id}” cannot fire — ${first.reason}. ${check.unroutable.length} of ${check.total} unroutable; open ⚡ Cues…`);
+      return false;
+    }
+    const armed = await window.nmx.cuesArm(film);
+    logPass(armed.tier === 2
+      ? `${armed.armed} cues armed on device (tier 2)`
+      : `${armed.armed} cues host-scheduled (tier 1 — ±20 ms, not repeatable)`);
+    return true;
+  } catch (e) {
+    status("Cue arm failed: " + e.message);
+    return false;
+  }
+}
+
+let cueSeq = 0;
+const newCueId = () => `cue-${++cueSeq}-${film.durationFrames}`;
+const selectedCue = () =>
+  selection?.kind === "cue" ? (film.events ?? []).find((e) => e.id === selection.id) : undefined;
+
+function addCue(frame = playheadFrame) {
+  snapshot();
+  film.events = film.events ?? [];
+  const ev = {
+    id: newCueId(),
+    frame: Math.max(0, Math.min(film.durationFrames, Math.round(frame))),
+    target: film.events.length ? film.events[film.events.length - 1].target : "cue-light",
+    action: { kind: "pulse", ms: 40 },
+  };
+  film.events.push(ev);
+  film.events.sort((a, b) => a.frame - b.frame);
+  selection = { kind: "cue", id: ev.id };
+  updateInspector(); render();
+  status(`Cue at ${tcOf(ev.frame)} → “${ev.target}”.`);
+}
+
+function delCue(id) {
+  snapshot();
+  film.events = (film.events ?? []).filter((e) => e.id !== id);
+  selection = null; updateInspector(); render();
+}
+
+/** Build the action object from the three action controls. */
+function actionFromUi() {
+  const kind = $("cueKind").value;
+  const a = Number($("cueArgA").value) || 0, b = Number($("cueArgB").value) || 0;
+  if (kind === "pulse") return { kind: "pulse", ms: Math.max(1, a || 40) };
+  if (kind === "level") return { kind: "level", value: Math.max(0, Math.min(1, a / 100)) };
+  if (kind === "dmx") return { kind: "dmx", channel: Math.max(1, Math.min(512, a || 1)), value: Math.max(0, Math.min(255, b)) };
+  return { kind: "camera" };
+}
+
+function updateCueInspector() {
+  const ev = selectedCue();
+  if (!ev) { selection = null; $("cueFields").style.display = "none"; $("kfEmpty").style.display = ""; return; }
+  $("kfEmpty").style.display = "none";
+  $("kfFields").style.display = "none";
+  $("cueFields").style.display = "flex";
+  $("cueLabel").textContent = `Cue · ${ev.action.kind}`;
+  $("cueFrame").value = String(ev.frame);
+  $("cueTc").textContent = tcOf(ev.frame);
+  $("cueTarget").value = ev.target;
+  $("cueKind").value = ev.action.kind;
+  const A = $("cueArgA"), B = $("cueArgB");
+  if (ev.action.kind === "pulse") { A.style.display = ""; B.style.display = "none"; A.value = String(ev.action.ms ?? 40); A.title = "pulse width, ms"; }
+  else if (ev.action.kind === "level") { A.style.display = ""; B.style.display = "none"; A.value = String(Math.round((ev.action.value ?? 0) * 100)); A.title = "level, %"; }
+  else if (ev.action.kind === "dmx") { A.style.display = ""; B.style.display = ""; A.value = String(ev.action.channel ?? 1); B.value = String(ev.action.value ?? 0); A.title = "DMX channel"; B.title = "DMX value 0-255"; }
+  else { A.style.display = "none"; B.style.display = "none"; }
+}
+
+$("cueAdd").onclick = () => addCue();
+$("cueFrame").onchange = () => {
+  const ev = selectedCue(); if (!ev) return;
+  snapshot();
+  ev.frame = Math.max(0, Math.min(film.durationFrames, Math.round(Number($("cueFrame").value))));
+  film.events.sort((a, b) => a.frame - b.frame);
+  updateCueInspector(); render();
+};
+$("cueTarget").onchange = () => {
+  const ev = selectedCue(); if (!ev) return;
+  snapshot(); ev.target = $("cueTarget").value.trim() || "cue-light"; render();
+};
+$("cueKind").onchange = () => {
+  const ev = selectedCue(); if (!ev) return;
+  snapshot();
+  ev.action = $("cueKind").value === "pulse" ? { kind: "pulse", ms: 40 }
+    : $("cueKind").value === "level" ? { kind: "level", value: 1 }
+    : $("cueKind").value === "dmx" ? { kind: "dmx", channel: 1, value: 255 }
+    : { kind: "camera" };
+  updateCueInspector(); render();
+};
+for (const id of ["cueArgA", "cueArgB"]) {
+  $(id).onchange = () => { const ev = selectedCue(); if (!ev) return; snapshot(); ev.action = actionFromUi(); updateCueInspector(); };
+}
+$("cueDelete").onclick = () => { const ev = selectedCue(); if (ev) delCue(ev.id); };
+$("cueTest").onclick = async () => {
+  const ev = selectedCue(); if (!ev) return;
+  try { await window.nmx.cueTest(ev.target, ev.action); status(`Fired “${ev.target}” once.`); }
+  catch (e) { status("Test failed: " + e.message); }
+};
+
+/* ---------------- trigger device + bindings ---------------- */
+
+let bindings = [];
+
+function renderBindings() {
+  $("cueBindings").innerHTML = bindings.map((b, i) => `
+    <div class="bind">
+      <input data-bt="${i}" type="text" value="${b.target}" spellcheck="false" />
+      <select data-bb="${i}">
+        <option value="simulated"${b.backendId === "simulated" ? " selected" : ""}>simulated</option>
+        <option value="serial"${b.backendId === "serial" ? " selected" : ""}>serial</option>
+      </select>
+      <input data-bo="${i}" type="number" min="1" max="512" value="${b.output}" class="num" style="width:56px" />
+      <button data-btest="${i}" title="Fire this output now">▶</button>
+      <button data-bdel="${i}" title="Remove">✕</button>
+    </div>`).join("") || `<div style="font-size:10.5px;color:var(--ink-faint)">No targets bound yet.</div>`;
+
+  const commit = () => window.nmx.setBindings(bindings);
+  $("cueBindings").querySelectorAll("[data-bt]").forEach((el) => el.onchange = () => { bindings[+el.dataset.bt].target = el.value.trim(); commit(); render(); });
+  $("cueBindings").querySelectorAll("[data-bb]").forEach((el) => el.onchange = () => { bindings[+el.dataset.bb].backendId = el.value; commit(); });
+  $("cueBindings").querySelectorAll("[data-bo]").forEach((el) => el.onchange = () => { bindings[+el.dataset.bo].output = Number(el.value); commit(); });
+  $("cueBindings").querySelectorAll("[data-bdel]").forEach((el) => el.onclick = () => { bindings.splice(+el.dataset.bdel, 1); commit(); renderBindings(); });
+  $("cueBindings").querySelectorAll("[data-btest]").forEach((el) => el.onclick = async () => {
+    const b = bindings[+el.dataset.btest];
+    try { await window.nmx.cueTest(b.target, { kind: "pulse", ms: 120 }); status(`Pulsed “${b.target}”.`); }
+    catch (e) { status("Test failed: " + e.message); }
+  });
+}
+
+$("cueAddBinding").onclick = () => {
+  const name = $("cueNewTarget").value.trim();
+  if (!name) return;
+  bindings.push({ target: name, backendId: "simulated", output: bindings.length + 1 });
+  $("cueNewTarget").value = "";
+  window.nmx.setBindings(bindings); renderBindings();
+};
+
+function setTier(tier, deviceLabel) {
+  const chip = $("cueTierChip");
+  chip.textContent = tier === 2 ? "tier 2 — device-scheduled" : "tier 1 — host-scheduled";
+  chip.classList.toggle("tier2", tier === 2);
+  $("cueDeviceLabel").textContent = deviceLabel ?? "no trigger device";
+  $("cueDisconnect").disabled = tier !== 2;
+}
+
+async function refreshCuePorts() {
+  const ports = await window.nmx.listPorts();
+  $("cuePort").innerHTML = ports.map((p) => `<option value="${p.path}">${p.path}${p.manufacturer ? " — " + p.manufacturer : ""}</option>`).join("");
+}
+$("cuePortRefresh").onclick = refreshCuePorts;
+$("cueCfg").onclick = async () => { await refreshCuePorts(); renderBindings(); $("cueModal").classList.add("open"); };
+$("cueConnect").onclick = async () => {
+  try {
+    const info = await window.nmx.triggerConnect($("cuePort").value);
+    setTier(info.tier, `${info.name} — ${info.outputs} out / ${info.inputs} in, protocol v${info.protocol}`);
+    status(`Trigger device connected: ${info.name} (tier ${info.tier}).`);
+  } catch (e) { status("Trigger connect failed: " + e.message); }
+};
+$("cueDisconnect").onclick = async () => {
+  await window.nmx.triggerDisconnect();
+  setTier(1, null);
+  status("Trigger device disconnected — cues fall back to host scheduling.");
+};
 
 /* ---------------- capture ---------------- */
 async function capture(i) {
@@ -1005,9 +1265,13 @@ $("tlGotoStart").onclick = async () => {
 $("tlRun").onclick = async () => {
   try {
     if (!uploaded) return status("Upload first (↑) — edits since last upload aren’t on the controller.");
+    if (!(await armCuesForPass())) return;
     kfPassCount++; $("tlPassCounter").textContent = "pass " + kfPassCount;
     await countdown(Math.round((await window.nmx.cueMs(film)) / 1000));
     await window.nmx.kfRun();
+    /* Cues start at the same instant the move does — the countdown happens
+       before both, so t=0 means the same thing on either side. */
+    await window.nmx.cuesStart();
     logPass(`KF pass ${kfPassCount} — “${film.name}”`);
     clearInterval(pollTimer);
     pollTimer = setInterval(async () => {
@@ -1022,7 +1286,10 @@ $("tlRun").onclick = async () => {
     }, 500);
   } catch (e) { status("Run blocked: " + e.message); }
 };
-$("tlStop").onclick = async () => { clearInterval(pollTimer); await window.nmx.kfStop(); status("Key-frame program stopped."); };
+$("tlStop").onclick = async () => {
+  clearInterval(pollTimer); await window.nmx.kfStop(); await window.nmx.cuesStop();
+  status("Key-frame program stopped.");
+};
 
 /* ---------------- classic 2-point ---------------- */
 $("markStart").onclick = async () => { await window.nmx.setStartHere(); status("START marked at current positions."); };
@@ -1039,9 +1306,12 @@ $("arm").onclick = async () => {
 $("gotoStart").onclick = async () => { await window.nmx.gotoStart(); status("Sending axes to start marks…"); };
 $("run").onclick = async () => {
   try {
+    if (!(await armCuesForPass())) return;
     passCount++; $("passCounter").textContent = "pass " + passCount;
     await countdown(Math.round((await window.nmx.cueMs(film)) / 1000));
-    await window.nmx.run(); logPass(`classic pass ${passCount}`);
+    await window.nmx.run();
+    await window.nmx.cuesStart();
+    logPass(`classic pass ${passCount}`);
     clearInterval(pollTimer);
     pollTimer = setInterval(async () => {
       try {
@@ -1070,7 +1340,7 @@ $("camOff").onclick = async () => { await window.nmx.camDisable(); status("Camer
 /* ---------------- e-stop ---------------- */
 $("estop").onclick = async () => {
   clearInterval(pollTimer); $("countdown").style.display = "none"; stopGamepad();
-  try { await window.nmx.stopAll(); status("STOP ALL sent — broadcast stop, both engines."); }
+  try { await window.nmx.stopAll(); status("STOP ALL — broadcast stop, both engines, and every armed cue aborted."); }
   catch (e) { status("STOP ALL error: " + e.message); }
 };
 
@@ -1092,7 +1362,21 @@ window.addEventListener("keydown", (e) => {
   if (meta && e.shiftKey && e.key.toLowerCase() === "e") { e.preventDefault(); openExport(); return; }
   if (e.key === "f" || e.key === "Home") { e.preventDefault(); return frameAll(); }
   if (e.key === " ") { e.preventDefault(); return $("tlRun").click(); }
-  if (!selection) return;
+  if (e.key === "c" || e.key === "C") { e.preventDefault(); return addCue(); }
+  if (selection?.kind === "cue") {
+    const ev = selectedCue();
+    if (!ev) return;
+    if (e.key === "Backspace" || e.key === "Delete") { e.preventDefault(); return delCue(ev.id); }
+    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && e.altKey) {
+      e.preventDefault(); snapshot();
+      const stepF = e.shiftKey ? Math.round(TC.fpsDecimal(film.timebase)) : 1;
+      ev.frame = Math.max(0, Math.min(film.durationFrames, ev.frame + (e.key === "ArrowRight" ? stepF : -stepF)));
+      film.events.sort((a, b) => a.frame - b.frame);
+      updateCueInspector(); render();
+    }
+    return;
+  }
+  if (selection?.kind !== "key") return;
   const pts = film.axes[selection.track].points, p = pts[selection.k];
   if (!p) return;
   const end = selection.k === 0 || selection.k === pts.length - 1;
@@ -1131,6 +1415,11 @@ function buildTimebasePicker() {
       lens: { focalLengthMm: 35, sensorWidthMm: 24.89, sensorHeightMm: 14 },
     };
     wireExportInputs();
+    bindings = (await window.nmx.getBindings()) ?? [];
+    setTier(1, null);
+    window.nmx.onCueFired(({ id, deviceMs }) => logPass(`cue ${id} fired @ ${deviceMs} ms (device clock)`));
+    window.nmx.onCueProblem((msg) => { logPass(`cue problem: ${msg}`); status(msg); });
+    window.nmx.onTriggerInput(({ n, edge, deviceMs }) => logPass(`GPI in ${n} ${edge} @ ${deviceMs} ms`));
     if (p?.jogSpeed) $("speed").value = p.jogSpeed;
     if (p?.gamepad) padCfg = { ...padCfg, ...p.gamepad, bindings: { ...padCfg.bindings, ...(p.gamepad.bindings ?? {}) } };
     if (Array.isArray(p?.limits) && p.limits.length === 3) limits = p.limits;

@@ -87,6 +87,20 @@ contextBridge.exposeInMainWorld("nmx", {
   exportFormats: () => ipcRenderer.invoke("nmx:export-formats"),
   exportMove: (film, formatId, opts) => ipcRenderer.invoke("nmx:export-move", film, formatId, opts),
   moveExtents: (film, calibration) => ipcRenderer.invoke("nmx:move-extents", film, calibration),
+  // triggers / cues (ADR-0016)
+  triggerBackends: () => ipcRenderer.invoke("nmx:trigger-backends"),
+  triggerConnect: (path) => ipcRenderer.invoke("nmx:trigger-connect", path),
+  triggerDisconnect: () => ipcRenderer.invoke("nmx:trigger-disconnect"),
+  getBindings: () => ipcRenderer.invoke("nmx:get-bindings"),
+  setBindings: (b) => ipcRenderer.invoke("nmx:set-bindings", b),
+  cueCheck: (film) => ipcRenderer.invoke("nmx:cue-check", film),
+  cuesArm: (film) => ipcRenderer.invoke("nmx:cues-arm", film),
+  cuesStart: () => ipcRenderer.invoke("nmx:cues-start"),
+  cuesStop: () => ipcRenderer.invoke("nmx:cues-stop"),
+  cueTest: (target, action) => ipcRenderer.invoke("nmx:cue-test", target, action),
+  onCueFired: (fn) => ipcRenderer.on("nmx:cue-fired", (_e, d) => fn(d)),
+  onCueProblem: (fn) => ipcRenderer.on("nmx:cue-problem", (_e, d) => fn(d)),
+  onTriggerInput: (fn) => ipcRenderer.on("nmx:trigger-input", (_e, d) => fn(d)),
   // e-stop
   stopAll: () => ipcRenderer.invoke("nmx:stop-all"),
 });
