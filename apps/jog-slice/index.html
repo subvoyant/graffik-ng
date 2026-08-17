@@ -1,0 +1,131 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Graffik NG</title>
+<style>
+  :root { color-scheme: dark; --bg:#14161a; --panel:#1b1f25; --line:#2a2e35; --line2:#39404a; --fg:#e6e8eb; --dim:#9aa3ad; --slide:#5aa9e6; --pan:#f4a259; --tilt:#8fd694; }
+  body { font: 13px/1.4 -apple-system, system-ui, sans-serif; background: var(--bg); color: var(--fg); margin: 0; padding: 10px 16px 14px; }
+  fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 8px; padding: 6px 12px 8px; }
+  legend { padding: 0 6px; color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+  button { background: #262b33; color: var(--fg); border: 1px solid var(--line2); border-radius: 6px; padding: 5px 11px; cursor: pointer; font-size: 13px; }
+  button:hover { background: #2f3541; }
+  button:disabled { opacity: .35; cursor: default; }
+  button.active { border-color: var(--slide); color: var(--slide); }
+  select, input[type=number], input[type=text] { background: var(--panel); color: var(--fg); border: 1px solid var(--line2); border-radius: 6px; padding: 4px 7px; font-size: 13px; }
+  input[type=number] { width: 62px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row + .row { margin-top: 6px; }
+  label.small { color: var(--dim); font-size: 11px; }
+  .axisrow { display: grid; grid-template-columns: 42px 54px 1fr 54px 100px; gap: 8px; align-items: center; margin: 4px 0; }
+  .axisrow .pos { font-variant-numeric: tabular-nums; color: var(--dim); text-align: right; }
+  .jogbtn { user-select: none; font-size: 15px; padding: 3px 0; width: 54px; }
+  .axisname { font-weight: 600; }
+  .c-slide { color: var(--slide); } .c-pan { color: var(--pan); } .c-tilt { color: var(--tilt); }
+  #timeline { width: 100%; height: 234px; display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; cursor: crosshair; touch-action: none; }
+  #estop { width: 100%; background: #7f1d1d; border-color: #b91c1c; font-size: 16px; font-weight: 700; padding: 10px; margin-top: 2px; }
+  #estop:hover { background: #991b1b; }
+  #status { color: var(--dim); min-height: 1.3em; margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #fwbadge.bad { color: #f87171; font-weight: 600; }
+  #countdown { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(10,12,15,.82); font-size: 120px; font-weight: 800; z-index: 10; letter-spacing: .05em; }
+  #passlog { max-height: 52px; overflow-y: auto; font-size: 11px; color: var(--dim); margin-top: 2px; }
+  #passlog div { padding: 1px 0; border-bottom: 1px dotted var(--line); }
+  progress { width: 100%; height: 6px; }
+  .hint { font-size: 10.5px; color: var(--dim); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+</style>
+</head>
+<body>
+<fieldset>
+  <legend>Connection</legend>
+  <div class="row">
+    <select id="ports" style="min-width:340px"></select>
+    <button id="refresh">↻</button>
+    <button id="connect">Connect</button>
+    <span id="fwbadge"></span>
+    <button id="fwOverride" style="display:none">Override gate (unsafe)</button>
+  </div>
+</fieldset>
+
+<fieldset>
+  <legend>Jog</legend>
+  <div class="row">
+    <label class="small">Speed (steps/s) <input id="speed" type="number" value="800" min="10" max="4000" step="10" /></label>
+    <button id="enable" disabled>Enable motors</button>
+    <button id="gamepad" disabled>🎮 Gamepad: off</button>
+    <span id="gamepadName" class="small"></span>
+  </div>
+  <div id="axes"></div>
+</fieldset>
+
+<fieldset>
+  <legend>Timeline — key-frame move</legend>
+  <div class="row">
+    <input id="moveName" type="text" value="Untitled Move" style="width:180px" />
+    <label class="small">Duration (s) <input id="tlDuration" type="number" value="30" min="2" max="600" /></label>
+    <label class="small">Cue (s) <input id="tlCue" type="number" value="5" min="0" max="120" /></label>
+    <button id="tlNew">New</button>
+    <button id="tlLoad">Load…</button>
+    <button id="tlSave">Save…</button>
+  </div>
+  <canvas id="timeline"></canvas>
+  <div class="hint">Drag playhead (top ruler) · drag keyframes to move · double-click a keyframe to delete · <b>⏺ Capture</b> adds a keyframe at the playhead from the rig's current position</div>
+  <div class="row">
+    <button id="capSlide" disabled class="c-slide">⏺ Slide</button>
+    <button id="capPan" disabled class="c-pan">⏺ Pan</button>
+    <button id="capTilt" disabled class="c-tilt">⏺ Tilt</button>
+    <span style="flex:1"></span>
+    <button id="tlUpload" disabled>⬆ Upload to NMX</button>
+    <button id="tlGotoStart" disabled>⏮ All to start</button>
+    <button id="tlRun" disabled>▶ Run pass</button>
+    <button id="tlStop" disabled>⏹ Stop</button>
+    <span id="tlPassCounter" class="small"></span>
+  </div>
+  <div class="row" id="kfInspector" style="display:none">
+    <span class="small" id="kfLabel"></span>
+    <label class="small">t (s) <input id="kfTime" type="number" step="0.1" /></label>
+    <label class="small">pos (steps) <input id="kfPos" type="number" step="10" /></label>
+    <button id="kfDelete">✕ Delete keyframe</button>
+    <span class="small">arrows nudge pos · ⇧ ×10 · ⌥←→ time · ⌘Z undo</span>
+  </div>
+  <progress id="tlProg" value="0" max="100"></progress>
+</fieldset>
+
+<fieldset>
+  <legend>2-point pass (classic engine)</legend>
+  <div class="row">
+    <button id="markStart" disabled>⬤ Mark START here</button>
+    <button id="markStop" disabled>⬤ Mark END here</button>
+    <label class="small">Duration (s) <input id="travel" type="number" value="30" min="1" max="600" /></label>
+    <button id="arm" disabled>Arm</button>
+    <button id="gotoStart" disabled>⏮ All to start</button>
+    <button id="run" disabled>▶ Run pass</button>
+    <span id="passCounter" class="small"></span>
+  </div>
+  <progress id="prog" value="0" max="100"></progress>
+</fieldset>
+
+<fieldset>
+  <legend>Camera (shutter via NMX)</legend>
+  <div class="row">
+    <label class="small">Trigger (ms) <input id="camTrigger" type="number" value="120" min="1" max="60000" /></label>
+    <label class="small">Focus (ms) <input id="camFocus" type="number" value="0" min="0" max="5000" /></label>
+    <label class="small">Delay (ms) <input id="camDelay" type="number" value="0" min="0" max="5000" /></label>
+    <button id="camArm" disabled>Arm camera</button>
+    <button id="camFire" disabled>📷 Test fire</button>
+    <button id="camOff" disabled>Disable</button>
+    <span id="camStatus" class="small"></span>
+  </div>
+</fieldset>
+
+<fieldset>
+  <legend>Pass log</legend>
+  <div id="passlog"></div>
+</fieldset>
+
+<button id="estop">STOP ALL</button>
+<div id="status"></div>
+<div id="countdown"></div>
+
+<script src="renderer.js"></script>
+</body>
+</html>

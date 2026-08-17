@@ -1,0 +1,27 @@
+{
+  "name": "@graffik-ng/jog-slice",
+  "version": "0.4.0",
+  "description": "Phase 1 vertical slice: connect to an NMX over USB serial, jog slide/pan/tilt, record start/stop points, run and re-run the move. STOP ALL wired to broadcast stop.",
+  "license": "MIT",
+  "type": "module",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --mac dmg --publish never"
+  },
+  "build": {
+    "appId": "com.subvoyant.graffik-ng",
+    "productName": "Graffik NG",
+    "directories": { "buildResources": "build", "output": "release" },
+    "files": ["main.js", "preload.cjs", "index.html", "renderer.js", "build/icons/**"],
+    "mac": { "category": "public.app-category.video", "target": "dmg" }
+  },
+  "dependencies": {
+    "@graffik-ng/nmx-protocol": "file:../../packages/nmx-protocol",
+    "serialport": "^12.0.0"
+  },
+  "devDependencies": {
+    "electron": "^43.4.0",
+    "electron-builder": "^26.0.0"
+  }
+}

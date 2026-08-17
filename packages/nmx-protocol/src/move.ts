@@ -1,0 +1,63 @@
+/**
+ * High-level move programming for the NMX key-frame engine.
+ *
+ * Produces the exact command sequence the official NMX Motion app sends for a
+ * key-framed move (per axis: setAxis → setKeyFrameCount → [video time] →
+ * all abscissas → all positions → all velocities → endTransmission), with
+ * interior velocities auto-computed on the Hermite spline (see spline.ts).
+ *
+ * The controller stores the program and executes it deterministically —
+ * upload once, then run identical passes with runSequence()/kfStart.
+ */
+
+import { Packet } from "./packet.js";
+import { keyFrame } from "./commands.js";
+import { KeyFramePoint, computeVelocities } from "./spline.js";
+
+export type AxisIndex = 0 | 1 | 2; // slide, pan, tilt (KF engine is 0-based)
+
+export interface AxisMove {
+  axis: AxisIndex;
+  /** Key frames: time in ms (video mode), position in steps. ≥2 points. */
+  points: KeyFramePoint[];
+}
+
+export interface KeyFrameMoveOptions {
+  /** Total video move duration, ms. Required for continuous (video) moves. */
+  videoTimeMs: number;
+  /** Motor velocity update rate at run time, ms. Firmware default applies if omitted. */
+  updateRateMs?: number;
+}
+
+/**
+ * Build the full upload sequence for a multi-axis key-framed move.
+ * Send every packet in order (NmxClient serializes them); then run with
+ * runSequence() or broadcast.kfStart().
+ */
+export function buildKeyFrameMove(axes: AxisMove[], options: KeyFrameMoveOptions): Packet[] {
+  if (axes.length === 0) throw new Error("no axes in move");
+  const packets: Packet[] = [];
+  if (options.updateRateMs !== undefined) {
+    packets.push(keyFrame.setUpdateRate(options.updateRateMs));
+  }
+  for (const { axis, points } of axes) {
+    const solved = computeVelocities(points);
+    packets.push(keyFrame.setAxis(axis));
+    packets.push(keyFrame.setKeyFrameCount(solved.length));
+    packets.push(keyFrame.setContinuousVideoTime(options.videoTimeMs));
+    for (const p of solved) packets.push(keyFrame.setNextAbscissa(p.time));
+    for (const p of solved) packets.push(keyFrame.setNextPosition(p.position));
+    for (const p of solved) packets.push(keyFrame.setNextVelocity(p.velocity));
+    packets.push(keyFrame.endTransmission());
+  }
+  return packets;
+}
+
+/**
+ * The pass-start sequence the official app uses: take up backlash, then run.
+ * Between passes, stop the program and re-run — the stored key frames persist
+ * on the controller until re-uploaded.
+ */
+export function runSequence(): Packet[] {
+  return [keyFrame.takeUpBacklash(), keyFrame.run()];
+}
