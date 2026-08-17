@@ -31,6 +31,10 @@ table live in [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md).
 - `packages/nmx-protocol`: `npm test` must be green (byte-exact protocol tests);
   `npx tsc --noEmit` must be clean. New commands need a provenance tag
   (`[S]`/`[F]`/`[R]`) and a test.
+- **Editing a `package.json` dependency? Run `npm install` in that package and
+  commit the updated `package-lock.json` in the same change.** CI installs with
+  `npm ci`, which fails loudly on manifest/lockfile drift — by design
+  (ADR-0011). This is the single easiest way to redden the build.
 - App code is plain JS/HTML on purpose (no bundler); keep the renderer free of
   Node/serial access (ADR-0007).
 - Hardware-affecting changes should be exercised against `SimulatedNmx` first.
