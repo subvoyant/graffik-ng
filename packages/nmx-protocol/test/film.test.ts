@@ -97,7 +97,7 @@ describe("the protocol boundary (frames -> ms)", () => {
   });
 });
 
-describe("v1 -> v2 migration", () => {
+describe("migration to the current schema", () => {
   const v1 = {
     format: "graffik-ng-move",
     version: 1,
@@ -114,7 +114,7 @@ describe("v1 -> v2 migration", () => {
 
   it("loads a v1 file and converts it to frames at 24 fps", () => {
     const f = deserializeFilm(JSON.stringify(v1));
-    expect(f.version).toBe(2);
+    expect(f.version).toBe(FILM_VERSION);
     expect(f.timebase).toEqual(TB_24);
     expect(f.durationFrames).toBe(720);
     expect(f.cueFrames).toBe(120);

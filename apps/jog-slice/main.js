@@ -19,6 +19,7 @@ import {
   EXPORT_FORMATS, DEFAULT_CALIBRATION, DEFAULT_LENS, moveExtents, alembicConverterScript,
   buildCueList, SimulatedTriggerBackend, SerialTriggerBackend, SimulatedTriggerDevice, CueScheduler,
   DmxTriggerBackend, SimulatedEnttecDevice, OscTriggerBackend, SimulatedDatagram,
+  sampleLensAxis, LENS_KINDS,
   NO_LIMITS, isTaught, jogWouldExceed, violationsForFilm, describeViolations,
 } from "@graffik-ng/nmx-protocol";
 
@@ -337,6 +338,22 @@ ipcMain.handle("nmx:upload-kf", async (_e, film) => {
   const packets = buildKeyFrameMove(filmAxesToMs(film), { videoTimeMs: filmDurationMs(film) });
   for (const p of packets) await c.send(p);
   return packets.length;
+});
+
+/**
+ * Solve every lens axis, one sample per frame (ADR-0017).
+ *
+ * Pure math, like `preview-move`, and through the SAME spline solver — so the
+ * focus curve the operator draws is the focus the rig will pull, rather than
+ * two interpolations that happen to look alike (ADR-0009).
+ */
+ipcMain.handle("nmx:preview-lens", (_e, film) => {
+  const out = {};
+  for (const ax of film.lensAxes ?? []) {
+    if (!LENS_KINDS.includes(ax.kind)) continue;
+    out[ax.kind] = sampleLensAxis(ax, film.durationFrames);
+  }
+  return out;
 });
 
 /** Cue countdown length in ms — the renderer counts down, main owns the math. */

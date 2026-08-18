@@ -1,6 +1,6 @@
 # Digest: @graffik-ng/nmx-protocol
 
-**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-17 (v0.9) · 190 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
+**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-18 (v0.10) · 214 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
 
 ## packet.ts — codec
 
@@ -46,16 +46,19 @@ Namespaces returning `Packet`: `general` (sub 0), `motors` (1–3, `Motor = 1|2|
 - `timecodeToFrames` **rejects** timecodes DF skips (`00:01:00;00`) — they do not exist, and accepting one hides a typo. Accepts `HH:MM:SS:FF`, `MM:SS:FF`, `SS:FF`, and a bare integer.
 - `retimeFrames(f, from, to)` preserves REAL TIME across a timebase change — the rig's behaviour is what must not move.
 
-## film.ts — move persistence (ADR-0010, ADR-0014, ADR-0016)
+## film.ts — move persistence (ADR-0010, ADR-0014, ADR-0016, ADR-0017)
 
-- **v2 schema (frames):** `{format, version:2, name, timebase, durationFrames, cueFrames, startFrame, engine, axes:[{axis, points:[{frame,position,velocity?}]}], events?, savedAt?, notes?}`. `startFrame` = timecode of frame 0, so a move lines up with the camera.
+- **v3 schema (frames):** `{format, version:3, name, timebase, durationFrames, cueFrames, startFrame, engine, axes:[{axis, points:[{frame,position,velocity?}]}], lensAxes?, events?, savedAt?, notes?}`. `startFrame` = timecode of frame 0, so a move lines up with the camera.
 - **Protocol boundary — the only place ms appear:** `filmDurationMs`, `filmCueMs`, `filmAxesToMs`. Rounding is ≤0.5 ms on an absolute abscissa, so it cannot accumulate.
 - `migrateFilm` v1→v2 assumes **24 fps** (v1 carried no timebase), preserves real duration exactly, and writes the assumption into `notes` rather than hiding it.
 - Validation: whole-frame keyframes, strictly increasing, within 0..durationFrames, ≥2 points/axis, legal timebase. Errors are operator-facing sentences.
+- `migrateFilm` v2→v3 only ADDS optional `lensAxes` — and the version went up anyway, so a v0.9 build **refuses** a v3 file instead of opening it with the focus pull silently gone.
+- `validateLensAxes(film)` rejects duplicate kinds (one focus lane, not two).
 - **Events (ADR-0016):** `FilmEvent {id, frame, durationFrames?, target, action, label?}`; `target` is a LOGICAL name so files stay portable between rigs. `buildCueList(film)` → device cue list in ms, sorted (Tier 2); `eventsInWindow(film, from, to)` → host dispatch, upper bound exclusive (Tier 1).
 
 ## export3d.ts — 3D camera export (ADR-0015)
 
+- `sampleLens(film)` → `LensTrack {focusMeters|null, fStop, focalLengthMm, unmapped}`. The USD camera prim carries animated `focusDistance` (converted by `metersPerUnit`), `focalLength`, `fStop`. An **unmapped** axis is NOT exported — a travel fraction is not a focal length — and the doc string carries a `NOT EXPORTED: …` note instead. CSV carries **both** travel fraction and mapped value.
 - `sampleRig(film, calibration)` → one `RigPose {frame, slideMm, panDeg, tiltDeg}` **per frame**, via `computeVelocities`/`splineAt` — the same solver the controller runs (ADR-0009). Never write a second interpolation for export.
 - `RigCalibration` is **measured on the rig**, not guessed: `slideStepsPerMm`, `panStepsPerDeg`, `tiltStepsPerDeg`, per-axis inverts, `nodalOffsetMm` (tilt axis → entrance pupil; ignoring it is why CG slides against a plate on tilts), `headHeightMm`.
 - `exportUsda` — writes `metersPerUnit` + `upAxis` + `timeCodesPerSecond` explicitly (USD's own fallbacks are 0.01/Y). Exports the **mechanism** — Carriage(translate) → Pan(rotate about up) → Tilt(rotate X) → Camera(nodal offset) — not a flattened matrix.
@@ -67,6 +70,16 @@ Namespaces returning `Packet`: `general` (sub 0), `motors` (1–3, `Motor = 1|2|
 - `moveExtents(film, cal)` → per-axis `{min,max,range}` in mm/degrees. Drives the export dialog's scale check; a factor-of-ten calibration error shows up here before it reaches another application.
 - `EXPORT_FORMATS` — the export menu: `usda · abc · ae · nk · chan · csv`, each with an operator-facing `note`.
 - **No Alembic:** Ogawa has no maintained pure-JS writer; converting our USD downstream is one `usdcat` away and keeps the core dependency-free.
+
+## lens.ts — focus / iris / zoom (ADR-0017)
+
+- **A lens position is a fraction of barrel travel, 0..1 — never a distance.** Raw motor steps mean nothing outside that motor on that lens on that day; the travel fraction is stable. Real units come from a **lens map**: witness marks pairing a travel fraction with what the barrel reads there. This is the Preston FI+Z model — calibrate to the mechanical stops, then record motor position at a handful of marked distances.
+- `LensAxis {kind:"focus"|"iris"|"zoom", target, keys:[{frame,position,velocity?}], map?, invert?}`. Units by kind: focus **metres**, iris **T-stop**, zoom **mm** (`LENS_UNITS`).
+- `lensValueAt(map, position)` interpolates **linearly between adjacent marks** and **clamps outside** them — a focus scale is grossly non-linear, so a global fit is wrong everywhere, and extrapolating past the last mark is inventing data. `lensPositionFor` is the inverse and handles a **descending** mark list (iris usually is).
+- `formatLensValue(axis, position)` returns `"42%"` when there is no map. It never fabricates a distance.
+- `sampleLensAxis(axis, durationFrames)` calls `computeVelocities`/`splineAt` — the SAME solver as motion (ADR-0009) — then clamps to 0..1. No second easing implementation exists.
+- `validateLensMap` (≥2 marks, positions in 0..1, strictly increasing) / `validateLensAxis` (whole frames, increasing, in range, ≥2 keys). `newLensAxis` starts flat at mid-travel.
+- **Nothing drives a lens motor yet.** ADR-0017 §4 specifies GRAFFIK-TRIG protocol v2 (`LAXIS`/`LCAL`/`LKEY`/`LSEEK`, device-side execution, one `GO`); it is not implemented. The app discloses this rather than implying otherwise.
 
 ## limits.ts — soft travel limits (ADR-0013)
 

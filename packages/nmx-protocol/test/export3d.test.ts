@@ -252,3 +252,55 @@ describe("format registry", () => {
     }
   });
 });
+
+describe("lens in the 3D export (ADR-0017)", () => {
+  const withLens = () => {
+    const f = move();
+    const focus = { kind: "focus" as const, target: "focus", keys: [{ frame: 0, position: 0 }, { frame: 48, position: 1 }],
+      map: { name: "m", kind: "focus" as const, marks: [{ position: 0, value: 1 }, { position: 1, value: 21 }] } };
+    const zoom = { kind: "zoom" as const, target: "zoom", keys: [{ frame: 0, position: 0 }, { frame: 48, position: 1 }],
+      map: { name: "z", kind: "zoom" as const, marks: [{ position: 0, value: 24 }, { position: 1, value: 70 }] } };
+    const iris = { kind: "iris" as const, target: "iris", keys: [{ frame: 0, position: 0.5 }, { frame: 48, position: 0.5 }] };
+    f.lensAxes = [focus, zoom, iris];
+    return f;
+  };
+
+  it("animates the USD camera's focus distance and focal length", () => {
+    const usd = exportUsda(withLens(), { calibration: CAL });
+    expect(usd).toContain("float focusDistance.timeSamples");
+    expect(usd).toContain("float focalLength.timeSamples");
+    expect(usd).toMatch(/48: 21\b/);       // focus reaches 21 m
+    expect(usd).toMatch(/48: 70\b/);       // zoom reaches 70 mm
+  });
+
+  it("converts focus distance into SCENE units, like every other length", () => {
+    const cm = exportUsda(withLens(), { calibration: CAL, metersPerUnit: 0.01 });
+    expect(cm).toMatch(/48: 2100\b/);      // 21 m -> 2100 cm
+  });
+
+  it("refuses to invent a distance for an UNMAPPED axis, and says so in the file", () => {
+    const usd = exportUsda(withLens(), { calibration: CAL });
+    expect(usd).not.toContain("fStop.timeSamples");
+    expect(usd).toContain("NOT EXPORTED: iris");
+  });
+
+  it("falls back to the static lens when there are no lens axes at all", () => {
+    const usd = exportUsda(move(), { calibration: CAL });
+    expect(usd).toContain("float focalLength = 35");
+    expect(usd).not.toContain("timeSamples = {\n                        0: 35");
+  });
+
+  it("puts both the travel fraction and the mapped value in the CSV", () => {
+    const rows = exportCsv(withLens(), { calibration: CAL }).trim().split("\n");
+    expect(rows[0]).toContain("focus_travel,focus_m");
+    expect(rows[0]).toContain("iris_travel,iris_unmapped");
+    // Index by header name rather than counting backwards — the column order
+    // follows the move's lens axes, so a positional guess is a future bug.
+    const cols = rows[0].split(","), last = rows[49].split(",");
+    const at = (name: string) => last[cols.indexOf(name)];
+    expect(at("zoom_mm")).toBe("70");
+    expect(at("zoom_travel")).toBe("1");
+    expect(at("focus_m")).toBe("21");
+    expect(at("iris_unmapped")).toBe("");         // no map, so no invented value
+  });
+});

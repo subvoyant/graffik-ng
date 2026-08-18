@@ -332,6 +332,22 @@ input[type=text] { font-size: 11.5px; }
           </div>
         </div>
 
+        <div id="lensFields" style="display:none;flex-direction:column;gap:6px">
+          <div id="lensLabel" style="font-size:11px;color:var(--ink-dim)"></div>
+          <div class="row">
+            <span class="field"><label>Frame</label><input id="lensFrame" class="num" type="number" step="1" data-unit="f" /></span>
+            <span class="tcread" id="lensTc"></span>
+          </div>
+          <div class="row">
+            <span class="field"><label>Travel</label><input id="lensPct" class="num" type="number" min="0" max="100" step="1" data-unit="%" /></span>
+            <span class="tcread" id="lensValue"></span>
+          </div>
+          <div class="row">
+            <button id="lensMarks" style="flex:1" title="Mark the lens so travel reads in real units">Marks…</button>
+            <button id="lensDelete" title="Delete this key">✕</button>
+          </div>
+        </div>
+
         <div id="cueFields" style="display:none;flex-direction:column;gap:6px">
           <div id="cueLabel" style="font-size:11px;color:var(--ink-dim)"></div>
           <div class="row">
@@ -402,6 +418,14 @@ input[type=text] { font-size: 11.5px; }
         <button id="capSlide" disabled>⏺ Slide</button>
         <button id="capPan" disabled>⏺ Pan</button>
         <button id="capTilt" disabled>⏺ Tilt</button>
+        <span class="field"><label>Lens</label>
+          <select id="lensAdd" title="Add a lens lane">
+            <option value="">+ lane…</option>
+            <option value="focus">Focus</option>
+            <option value="iris">Iris</option>
+            <option value="zoom">Zoom</option>
+          </select>
+        </span>
         <button id="cueAdd" title="Add a cue at the playhead (C)">+ Cue</button>
         <button id="cueCfg" title="Trigger device and target bindings">⚡ Cues…</button>
         <span class="grow"></span>
@@ -489,6 +513,39 @@ input[type=text] { font-size: 11.5px; }
 </div>
 
 <!-- ============ shortcuts ============ -->
+<div class="modal" id="lensModal">
+  <div class="sheet" style="width:560px">
+    <header>Lens marks <span class="grow"></span><button data-close>✕</button></header>
+    <div class="body">
+      <div class="row">
+        <span class="field" style="flex:1"><label>Lens</label>
+          <input id="lensMapName" type="text" placeholder="e.g. Zeiss CP.3 32mm" spellcheck="false" style="flex:1" />
+        </span>
+        <span id="lensMapKind" class="chip dim">focus</span>
+      </div>
+      <div style="font-size:10.5px;color:var(--ink-faint)">
+        A lens motor knows only <b>how far along the barrel it is</b> — 0 to 100% of travel. Marks turn
+        that into real distances, the same way an AC marks the barrel. Without marks the lane still
+        works and still repeats; it just reads in percent, and the 3D export leaves focus out rather
+        than inventing a distance.
+      </div>
+      <header class="subhead">Marks — travel % and what it reads</header>
+      <div id="lensMarkRows"></div>
+      <div class="row">
+        <span class="field"><label>At</label><input id="lensNewPos" class="num" type="number" min="0" max="100" step="1" value="50" data-unit="%" /></span>
+        <span class="field"><label>Reads</label><input id="lensNewVal" class="num" type="number" step="0.1" value="2" /></span>
+        <span class="field"><label>Label</label><input id="lensNewLabel" type="text" placeholder="6'6&quot;" spellcheck="false" style="width:92px" /></span>
+        <button id="lensAddMark">Add</button>
+      </div>
+      <div class="row">
+        <button id="lensRemoveAxis" title="Remove this lane from the move">Remove lane</button>
+        <span class="grow"></span>
+        <label class="chk"><input type="checkbox" id="lensInvert" /> motor runs backwards</label>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="cueModal">
   <div class="sheet" style="width:600px">
     <header>Cue outputs &amp; trigger device <span class="grow"></span><button data-close>✕</button></header>

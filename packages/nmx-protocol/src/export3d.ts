@@ -29,6 +29,7 @@
 import { Film, filmAxesToMs } from "./film.js";
 import { computeVelocities, splineAt } from "./spline.js";
 import { framesToMs, fpsDecimal, framesToTimecode } from "./timecode.js";
+import { LensAxis, LensAxisKind, sampleLensAxis, lensValueAt, LENS_UNITS } from "./lens.js";
 
 /* ------------------------------------------------------------------
    Calibration — the answer to "how do steps become metres and degrees"
@@ -107,6 +108,33 @@ const DEFAULTS: Required<Omit<ExportOptions, "calibration" | "lens">> = {
 /* ------------------------------------------------------------------
    Sampling — one pose per frame, from the SAME solver the rig runs
    ------------------------------------------------------------------ */
+
+/**
+ * Per-frame lens values in real units, ready for a 3D camera (ADR-0017).
+ * `null` where the axis is absent or unmapped — a normalised 0..1 barrel
+ * position is not a focus distance, and exporting one as if it were would put
+ * a confidently wrong number into a VFX pipeline.
+ */
+export interface LensTrack {
+  focusMeters: number[] | null;
+  fStop: number[] | null;
+  focalLengthMm: number[] | null;
+  /** Which axes existed but had no lens map, so the export dropped them. */
+  unmapped: LensAxisKind[];
+}
+
+export function sampleLens(film: Film): LensTrack {
+  const out: LensTrack = { focusMeters: null, fStop: null, focalLengthMm: null, unmapped: [] };
+  for (const ax of film.lensAxes ?? []) {
+    const positions = sampleLensAxis(ax, film.durationFrames);
+    if (!ax.map) { out.unmapped.push(ax.kind); continue; }
+    const values = positions.map((p) => lensValueAt(ax.map!, ax.invert ? 1 - p : p));
+    if (ax.kind === "focus") out.focusMeters = values;
+    else if (ax.kind === "iris") out.fStop = values;
+    else out.focalLengthMm = values;
+  }
+  return out;
+}
 
 export interface RigPose {
   frame: number;
@@ -190,6 +218,25 @@ export function exportUsda(film: Film, opts: ExportOptions = {}): string {
   const panSamples = poses.map((p) => `            ${p.frame}: ${n(p.panDeg)},`).join("\n");
   const tiltSamples = poses.map((p) => `            ${p.frame}: ${n(p.tiltDeg)},`).join("\n");
 
+  const lens3d = sampleLens(film);
+  const timeSamples = (vals: number[], fmt: (v: number) => string) =>
+    vals.map((v, i) => `                        ${i}: ${fmt(v)},`).join("\n");
+  /* USD focusDistance is in SCENE units, not metres — so it converts with the
+     stage scale like any other length. focalLength and fStop are absolute. */
+  const focusAttr = lens3d.focusMeters
+    ? `                    float focusDistance.timeSamples = {\n${timeSamples(lens3d.focusMeters, (v) => String(n(v / o.metersPerUnit)))}\n                    }\n`
+    : `                    float focusDistance = 5\n`;
+  const focalAttr = lens3d.focalLengthMm
+    ? `                    float focalLength.timeSamples = {\n${timeSamples(lens3d.focalLengthMm, (v) => String(n(v)))}\n                    }\n`
+    : `                    float focalLength = ${n(lens.focalLengthMm)}\n`;
+  const fStopAttr = lens3d.fStop
+    ? `                    float fStop.timeSamples = {\n${timeSamples(lens3d.fStop, (v) => String(n(v)))}\n                    }\n`
+    : "";
+  const lensNote = lens3d.unmapped.length
+    ? `\n             NOT EXPORTED: ${lens3d.unmapped.join(", ")} — the lens has no marks, and a
+             normalised barrel position is not a focus distance.`
+    : "";
+
   const startTc = framesToTimecode(film.startFrame, film.timebase);
   const endTc = framesToTimecode(film.startFrame + film.durationFrames, film.timebase);
 
@@ -199,7 +246,7 @@ export function exportUsda(film: Film, opts: ExportOptions = {}): string {
              ${film.durationFrames} frames @ ${fps} fps, ${startTc} to ${endTc}
              Baked one sample per frame from the same spline solver that drives
              the NMX controller. Calibration: ${cal.slideStepsPerMm} steps/mm slide,
-             ${cal.panStepsPerDeg} steps/deg pan, ${cal.tiltStepsPerDeg} steps/deg tilt."""
+             ${cal.panStepsPerDeg} steps/deg pan, ${cal.tiltStepsPerDeg} steps/deg tilt.${lensNote}"""
     defaultPrim = "${o.name}"
     metersPerUnit = ${o.metersPerUnit}
     upAxis = "${o.upAxis}"
@@ -234,8 +281,7 @@ ${tiltSamples}
 
                 def Camera "Camera"
                 {
-                    float focalLength = ${n(lens.focalLengthMm)}
-                    float horizontalAperture = ${n(lens.sensorWidthMm)}
+${focalAttr}${focusAttr}${fStopAttr}                    float horizontalAperture = ${n(lens.sensorWidthMm)}
                     float verticalAperture = ${n(lens.sensorHeightMm)}
                     float2 clippingRange = (0.01, 10000)
                     token projection = "perspective"
@@ -421,11 +467,21 @@ export function exportCsv(film: Film, opts: ExportOptions = {}): string {
   };
   const mmToUnit = 0.001 / o.metersPerUnit;
 
+  const lensAxes = film.lensAxes ?? [];
+  const lensCols = lensAxes.map((ax) => ({
+    ax,
+    positions: sampleLensAxis(ax, film.durationFrames),
+  }));
+
   const head = [
     "frame", "timecode", "ms",
     "slide_steps", "pan_steps", "tilt_steps",
     "slide_mm", "pan_deg", "tilt_deg",
     `slide_scene_units_at_${o.metersPerUnit}m`,
+    /* Both the raw travel fraction AND the mapped value: the fraction is what
+       the rig was told, the value is what the lens claims it means. When they
+       disagree the lens map is wrong, and only having both makes that visible. */
+    ...lensCols.flatMap(({ ax }) => [`${ax.kind}_travel`, `${ax.kind}_${ax.map ? LENS_UNITS[ax.kind].unit : "unmapped"}`]),
   ].join(",");
 
   const rows = sampleRig(film, cal).map((p) => {
@@ -437,6 +493,10 @@ export function exportCsv(film: Film, opts: ExportOptions = {}): string {
       n(steps(0, ms)), n(steps(1, ms)), n(steps(2, ms)),
       n(p.slideMm), n(p.panDeg), n(p.tiltDeg),
       n(p.slideMm * mmToUnit),
+      ...lensCols.flatMap(({ ax, positions }) => {
+        const t = positions[p.frame] ?? 0;
+        return [n(t), ax.map ? n(lensValueAt(ax.map, ax.invert ? 1 - t : t)) : ""];
+      }),
     ].join(",");
   });
   return [head, ...rows].join("\n") + "\n";

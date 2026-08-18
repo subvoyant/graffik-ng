@@ -72,6 +72,7 @@ contextBridge.exposeInMainWorld("nmx", {
   previewMove: (film, n) => ipcRenderer.invoke("nmx:preview-move", film, n),
   uploadKf: (film) => ipcRenderer.invoke("nmx:upload-kf", film),
   cueMs: (film) => ipcRenderer.invoke("nmx:cue-ms", film),
+  previewLens: (film) => ipcRenderer.invoke("nmx:preview-lens", film),
   kfRun: () => ipcRenderer.invoke("nmx:kf-run"),
   kfStop: () => ipcRenderer.invoke("nmx:kf-stop"),
   kfProgress: () => ipcRenderer.invoke("nmx:kf-progress"),

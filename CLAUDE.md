@@ -9,6 +9,7 @@ You are working on Graffik NG: TypeScript/Electron software driving a Dynamic Pe
 
 **Rules:**
 - Decisions live in `docs/adr/` (index: `docs/adr/README.md`). Don't contradict an Accepted ADR silently — write a superseding one.
+- `docs/DECISIONS.md` is the running session-by-session log (what broke, what was learned) — ADRs are the canonical *why*; that file is the narrative around them. Append to it at the end of every working session.
 - If you change a module's behavior, API, or invariants: update its digest + the hub **in the same change**, and refresh its "Verified against" stamp. A stale digest is a bug.
 - Update "Current state & next steps" in the hub at the end of every working session.
 - Never paste or port GPL code from the reference repos (ADR-0003). Facts only.

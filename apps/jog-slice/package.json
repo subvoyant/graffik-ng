@@ -1,6 +1,6 @@
 {
   "name": "@graffik-ng/jog-slice",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Phase 1 vertical slice: connect to an NMX over USB serial, jog slide/pan/tilt, record start/stop points, run and re-run the move. STOP ALL wired to broadcast stop.",
   "license": "MIT",
   "type": "module",

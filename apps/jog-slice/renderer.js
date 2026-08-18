@@ -84,7 +84,23 @@ if (!window.nmx) {
       return { axis, samples: s };
     }),
     uploadKf: async (f) => f.axes.length * 8,
-    cueMs: async (f) => Math.round((f.cueFrames * 1000 * f.timebase.den) / f.timebase.num), kfRun: async () => { pct = 0; }, kfStop: async () => {},
+    cueMs: async (f) => Math.round((f.cueFrames * 1000 * f.timebase.den) / f.timebase.num),
+    previewLens: async (f) => {
+      const out = {};
+      for (const ax of f.lensAxes ?? []) {
+        const s = [];
+        for (let fr = 0; fr <= f.durationFrames; fr++) {
+          let seg = 0;
+          for (let k = 0; k < ax.keys.length - 1; k++) if (fr >= ax.keys[k].frame) seg = k;
+          const a = ax.keys[seg], b = ax.keys[seg + 1] ?? a;
+          const u = b.frame === a.frame ? 0 : (fr - a.frame) / (b.frame - a.frame);
+          const e = u * u * (3 - 2 * u);
+          s.push(a.position + (b.position - a.position) * e);
+        }
+        out[ax.kind] = s;
+      }
+      return out;
+    }, kfRun: async () => { pct = 0; }, kfStop: async () => {},
     kfProgress: async () => ({ state: pct < 100 ? 1 : 0, percent: (pct = Math.min(100, pct + 20)) }),
     gotoKfStart: async () => {},
     camArm: async () => {}, camFire: async () => {}, camDisable: async () => {},
@@ -139,6 +155,23 @@ const AXES = [
   { name: "Slide", motor: 1, axis: 0, color: css.getPropertyValue("--slide").trim() },
   { name: "Pan",   motor: 2, axis: 1, color: css.getPropertyValue("--pan").trim() },
   { name: "Tilt",  motor: 3, axis: 2, color: css.getPropertyValue("--tilt").trim() },
+];
+/**
+ * Lens axes reuse categorical slots 1–3 rather than taking slots 4–6.
+ *
+ * Six simultaneous series FAILED the palette validator on all-pairs: magenta↔
+ * aqua came out at ΔE 1.6 under deuteranopia (indistinguishable), and yellow↔
+ * orange at 10.6 for normal vision. The skill's own guidance for that failure
+ * is to facet rather than invent hues, and faceting is the better UI anyway —
+ * you compare slide against pan, or focus against iris, never tilt against
+ * zoom. So: two labelled, banded groups of three, each carrying the validated
+ * three-slot palette that passes all-pairs. Identity comes from the group band
+ * and the direct label, never from colour alone.
+ */
+const LENS_AXES = [
+  { name: "Focus", kind: "focus", color: css.getPropertyValue("--slide").trim() },
+  { name: "Iris",  kind: "iris",  color: css.getPropertyValue("--pan").trim() },
+  { name: "Zoom",  kind: "zoom",  color: css.getPropertyValue("--tilt").trim() },
 ];
 const INK_FAINT = css.getPropertyValue("--ink-faint").trim();
 const LINE = css.getPropertyValue("--line").trim();
@@ -206,6 +239,8 @@ function defaultFilm(durationFrames, tb = film?.timebase ?? TC.DEFAULT_TIMEBASE)
 }
 let film = defaultFilm(undefined, TC.DEFAULT_TIMEBASE);
 let playheadFrame = 0, previewCache = null, uploaded = false, selection = null;
+/** Per-frame lens travel, keyed by axis kind. Solved in main, like the motion. */
+let lensCache = null;
 /** Path of the move on disk, or null if it has never been saved. Save writes
     here without a dialog; Save As always asks. */
 let filePath = null, dirty = false;
@@ -492,9 +527,28 @@ const RULER = 20, PAD_L = 40, PAD_R = 12, CUE_LANE = 22;
     putting them above the axes says they belong to the move, not to an axis. */
 const cueRect = () => ({ x: PAD_L, y: RULER, w: cv.clientWidth - PAD_L - PAD_R, h: CUE_LANE });
 const tracksTop = () => RULER + CUE_LANE;
+const GROUP_HEAD = 15;   // the banded label strip above each group's tracks
+
+/** Lens tracks only take space when the move actually has lens axes. */
+const lensAxesOf = () => film.lensAxes ?? [];
+const hasLens = () => lensAxesOf().length > 0;
+
+/** Total rows across both groups, used to split the remaining height. */
+const rowCount = () => 3 + lensAxesOf().length;
+const rowHeight = () => {
+  const heads = hasLens() ? GROUP_HEAD * 2 : 0;
+  return (cv.clientHeight - tracksTop() - heads) / rowCount();
+};
+const motionTop = () => tracksTop() + (hasLens() ? GROUP_HEAD : 0);
+const lensTop = () => motionTop() + rowHeight() * 3 + GROUP_HEAD;
+
 const trackRect = (i) => {
-  const h = (cv.clientHeight - tracksTop()) / 3;
-  return { x: PAD_L, y: tracksTop() + i * h + 6, w: cv.clientWidth - PAD_L - PAD_R, h: h - 12 };
+  const h = rowHeight();
+  return { x: PAD_L, y: motionTop() + i * h + 6, w: cv.clientWidth - PAD_L - PAD_R, h: h - 12 };
+};
+const lensRect = (i) => {
+  const h = rowHeight();
+  return { x: PAD_L, y: lensTop() + i * h + 6, w: cv.clientWidth - PAD_L - PAD_R, h: h - 12 };
 };
 const fToX = (f, r) => r.x + ((f - view.f0) / (view.f1 - view.f0)) * r.w;
 const xToF = (x, r) => view.f0 + ((x - r.x) / r.w) * (view.f1 - view.f0);
@@ -605,6 +659,24 @@ function render() {
     ctx.restore();
   }
 
+  /* group bands — the faceting that lets both groups reuse slots 1-3 */
+  const band = (y, label) => {
+    const w = cv.clientWidth - PAD_L - PAD_R;
+    ctx.fillStyle = "#171a1e"; ctx.fillRect(0, y, cv.clientWidth, GROUP_HEAD);
+    ctx.fillStyle = LINE; ctx.fillRect(0, y + GROUP_HEAD - 1, cv.clientWidth, 1);
+    ctx.fillStyle = INK_FAINT; ctx.font = "600 9px system-ui";
+    ctx.fillText(label, PAD_L, y + GROUP_HEAD / 2 + 1);
+    return w;
+  };
+  if (hasLens()) {
+    band(tracksTop(), "MOTION — SLIDE · PAN · TILT");
+    band(
+      lensTop() - GROUP_HEAD,
+      "LENS — " + lensAxesOf().map((a) => a.kind.toUpperCase()).join(" · ") +
+        "   (authoring + export only — no lens device yet)",
+    );
+  }
+
   /* tracks */
   AXES.forEach((a, i) => {
     const r = trackRect(i), s = axisScale(i);
@@ -668,6 +740,81 @@ function render() {
       ctx.fillStyle = a.color; ctx.fill();
       ctx.strokeStyle = sel ? "#ffffff" : "#0e1013"; ctx.lineWidth = sel ? 1.6 : 1; ctx.stroke(); ctx.lineWidth = 1;
     });
+  });
+
+  /* lens tracks (ADR-0017) — normalised barrel travel, fixed 0..1 scale so a
+     focus pull's shape is comparable between takes rather than auto-rescaled */
+  lensAxesOf().forEach((ax, i) => {
+    const def = LENS_AXES.find((d) => d.kind === ax.kind) ?? LENS_AXES[0];
+    const r = lensRect(i);
+    ctx.strokeStyle = LINE; ctx.lineWidth = 1;
+    ctx.strokeRect(r.x + .5, r.y + .5, r.w - 1, r.h - 1);
+    const y01 = (v) => r.y + r.h - v * r.h;
+
+    /* quarter guides: a lens has no natural zero, so the grid is the barrel */
+    ctx.strokeStyle = "#1b1f23";
+    for (const q of [0.25, 0.5, 0.75]) {
+      ctx.beginPath(); ctx.moveTo(r.x, y01(q)); ctx.lineTo(r.x + r.w, y01(q)); ctx.stroke();
+    }
+
+    ctx.save(); ctx.translate(13, r.y + r.h / 2); ctx.rotate(-Math.PI / 2);
+    ctx.textAlign = "center"; ctx.fillStyle = def.color; ctx.font = "600 10px system-ui";
+    ctx.fillText(def.name.toUpperCase(), 0, 0); ctx.restore(); ctx.textAlign = "left";
+
+    /* End-of-travel labels. The motion tracks auto-scale, so a number on them
+       would be meaningless; a lens track's scale is FIXED and load-bearing —
+       without these two labels the operator cannot tell which end of the lane
+       is infinity and which is the close stop, and a focus lane you can misread
+       is worse than no focus lane. Drawn before the curve so the curve wins any
+       overlap. Reads real units through the map, percent without one. */
+    ctx.fillStyle = INK_FAINT; ctx.font = "8px ui-monospace, Menlo, monospace";
+    ctx.fillText(lensEndLabel(ax, 1), r.x + 4, r.y + 9);
+    ctx.fillText(lensEndLabel(ax, 0), r.x + 4, r.y + r.h - 4);
+
+    const samples = lensCache?.[ax.kind];
+    if (samples) {
+      ctx.save(); ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
+      ctx.strokeStyle = def.color; ctx.lineWidth = 2; ctx.lineJoin = "round"; ctx.beginPath();
+      let started = false;
+      for (let f = Math.max(0, Math.floor(view.f0)); f <= Math.min(film.durationFrames, Math.ceil(view.f1)); f++) {
+        const x = fToX(f, r), y = y01(samples[f] ?? 0);
+        started ? ctx.lineTo(x, y) : (ctx.moveTo(x, y), started = true);
+      }
+      ctx.stroke(); ctx.restore(); ctx.lineWidth = 1;
+    }
+
+    ax.keys.forEach((k, ki) => {
+      if (k.frame < view.f0 - 8 || k.frame > view.f1 + 8) return;
+      const x = fToX(k.frame, r), y = y01(k.position);
+      const sel = selection?.kind === "lens" && selection.axis === ax.kind && selection.k === ki;
+      const R = sel ? 6 : 4.5;
+      ctx.beginPath();
+      ctx.moveTo(x, y - R); ctx.lineTo(x + R, y); ctx.lineTo(x, y + R); ctx.lineTo(x - R, y); ctx.closePath();
+      ctx.fillStyle = def.color; ctx.fill();
+      ctx.strokeStyle = sel ? "#ffffff" : "#0e1013"; ctx.lineWidth = sel ? 1.6 : 1; ctx.stroke(); ctx.lineWidth = 1;
+    });
+
+    /* Live value AT the playhead, drawn AT the playhead.
+       It used to be pinned to the track's top-right corner, where it read like
+       a scale label rather than a scrub readout and collided with any key on
+       the last frame. A focus puller reads this against the picture, so it has
+       to sit on the line it describes. Flips side near the right edge. */
+    if (samples) {
+      const pf = Math.max(0, Math.min(film.durationFrames, Math.round(playheadFrame)));
+      const px = fToX(pf, r);
+      if (px >= r.x - 1 && px <= r.x + r.w + 1) {
+        const text = formatLens(ax, samples[pf] ?? 0);
+        ctx.font = "9px ui-monospace, Menlo, monospace";
+        const tw = ctx.measureText(text).width;
+        const flip = px + 8 + tw + 4 > r.x + r.w;
+        const bx = flip ? px - 8 - tw - 4 : px + 8;
+        const by = Math.max(r.y + 2, Math.min(r.y + r.h - 15, y01(samples[pf] ?? 0) - 7));
+        ctx.fillStyle = "rgba(14,16,19,.82)";
+        ctx.fillRect(bx, by, tw + 6, 13);
+        ctx.fillStyle = def.color;
+        ctx.fillText(text, bx + 3, by + 9.5);
+      }
+    }
   });
 
   /* playhead */
@@ -745,6 +892,21 @@ function hitCue(mx, my) {
   return null;
 }
 
+/** A lens key under the pointer, if any. */
+function hitLens(mx, my) {
+  const axes = lensAxesOf();
+  for (let i = 0; i < axes.length; i++) {
+    const r = lensRect(i), ax = axes[i];
+    if (my < r.y || my > r.y + r.h) continue;
+    for (let k = 0; k < ax.keys.length; k++) {
+      const x = fToX(ax.keys[k].frame, r), y = r.y + r.h - ax.keys[k].position * r.h;
+      if ((mx - x) ** 2 + (my - y) ** 2 < 90) return { axis: ax.kind, k, r, i };
+    }
+    return { axis: ax.kind, k: -1, r, i };      // in the lane, but not on a key
+  }
+  return null;
+}
+
 cv.addEventListener("pointerdown", (e) => {
   const b = cv.getBoundingClientRect(), mx = e.clientX - b.left, my = e.clientY - b.top;
   cv.setPointerCapture(e.pointerId);
@@ -754,6 +916,13 @@ cv.addEventListener("pointerdown", (e) => {
   if (my >= cueR.y && my <= cueR.y + cueR.h) {
     const ev = hitCue(mx, my);
     if (ev) { snapshot(); selection = { kind: "cue", id: ev.id }; drag = { type: "cue", id: ev.id }; }
+    else selection = null;
+    updateInspector(); render();
+    return;
+  }
+  const lh = hitLens(mx, my);
+  if (lh) {
+    if (lh.k >= 0) { snapshot(); selection = { kind: "lens", axis: lh.axis, k: lh.k }; drag = { type: "lens", ...lh }; }
     else selection = null;
     updateInspector(); render();
     return;
@@ -771,6 +940,19 @@ cv.addEventListener("pointermove", (e) => {
     const r = { x: PAD_L, w: cv.clientWidth - PAD_L - PAD_R };
     const d = ((drag.x - mx) / r.w) * (view.f1 - view.f0);
     view.f0 += d; view.f1 += d; drag.x = mx; return render();
+  }
+  if (drag.type === "lens") {
+    const ax = lensAxesOf().find((a) => a.kind === drag.axis);
+    if (ax) {
+      const key = ax.keys[drag.k], r = drag.r;
+      key.position = Math.max(0, Math.min(1, (r.y + r.h - my) / r.h));
+      if (drag.k > 0 && drag.k < ax.keys.length - 1) {
+        const lo = ax.keys[drag.k - 1].frame + MIN_GAP, hi = ax.keys[drag.k + 1].frame - MIN_GAP;
+        key.frame = Math.max(lo, Math.min(hi, xToFrame(mx, r)));
+      }
+      updateInspector(); refreshLens();
+    }
+    return;
   }
   if (drag.type === "cue") {
     const ev = (film.events ?? []).find((x) => x.id === drag.id);
@@ -795,6 +977,28 @@ cv.addEventListener("dblclick", (e) => {
   const b = cv.getBoundingClientRect(), mx = e.clientX - b.left, my = e.clientY - b.top;
   const ev = hitCue(mx, my);
   if (ev) return delCue(ev.id);
+  const lh = hitLens(mx, my);
+  if (lh) {
+    const ax = lensAxesOf().find((a) => a.kind === lh.axis);
+    if (!ax) return;
+    if (lh.k > 0 && lh.k < ax.keys.length - 1) {      // endpoints stay
+      snapshot(); ax.keys.splice(lh.k, 1); selection = null;
+      updateInspector(); refreshLens(); return;
+    }
+    /* Double-click in empty lane space adds a key at the pointer. */
+    if (lh.k < 0) {
+      snapshot();
+      const f = Math.max(0, Math.min(film.durationFrames, xToFrame(mx, lh.r)));
+      const pos = Math.max(0, Math.min(1, (lh.r.y + lh.r.h - my) / lh.r.h));
+      if (!ax.keys.some((k) => Math.abs(k.frame - f) < MIN_GAP)) {
+        ax.keys.push({ frame: f, position: pos });
+        ax.keys.sort((a, b) => a.frame - b.frame);
+        refreshLens();
+      }
+      return;
+    }
+    return;
+  }
   const h = hit(mx, my);
   if (h) delKey(h.track, h.k);
 });
@@ -813,7 +1017,9 @@ function delKey(track, k) {
 /* ---------------- inspector ---------------- */
 function updateInspector() {
   if (selection?.kind === "cue") return updateCueInspector();
+  if (selection?.kind === "lens") return updateLensInspector();
   $("cueFields").style.display = "none";
+  $("lensFields").style.display = "none";
   const p = selection?.kind === "key" && film.axes[selection.track].points[selection.k];
   if (!p) { $("kfEmpty").style.display = ""; $("kfFields").style.display = "none"; selection = null; return; }
   $("kfEmpty").style.display = "none"; $("kfFields").style.display = "flex";
@@ -850,6 +1056,175 @@ $("kfPos").onchange = () => {
   refreshPreview();
 };
 $("kfDelete").onclick = () => selection?.kind === "key" && delKey(selection.track, selection.k);
+
+/* ---------------- lens axes (ADR-0017) ---------------- */
+
+/** Real units where the lens is mapped, percent where it is not — never a fake distance. */
+function formatLens(ax, position) {
+  if (!ax.map) return `${Math.round(position * 100)}%`;
+  const m = ax.map.marks;
+  const p = ax.invert ? 1 - position : position;
+  let v = m[m.length - 1].value;
+  if (p <= m[0].position) v = m[0].value;
+  else {
+    for (let i = 0; i < m.length - 1; i++) {
+      const a = m[i], b = m[i + 1];
+      if (p >= a.position && p <= b.position) { v = a.value + (b.value - a.value) * ((p - a.position) / (b.position - a.position)); break; }
+    }
+  }
+  if (ax.kind === "iris") return `T${v.toFixed(1)}`;
+  if (ax.kind === "zoom") return `${Math.round(v)}mm`;
+  return `${v < 10 ? v.toFixed(2) : v.toFixed(1)}m`;
+}
+
+/**
+ * The label at a hard stop. Prefer what the AC actually wrote on the barrel —
+ * "\u221e" is the truth at the far stop, and printing the map's numeric there
+ * ("60.0m") claims a precision the engraving never had. Falls back to the
+ * mapped number, then to percent, so an unmapped lane still reads honestly.
+ */
+function lensEndLabel(ax, end) {
+  const m = ax.map?.marks;
+  if (!m?.length) return formatLens(ax, end);
+  const mk = (ax.invert ? 1 - end : end) === 0 ? m[0] : m[m.length - 1];
+  return mk.label || formatLens(ax, end);
+}
+
+const selectedLens = () =>
+  selection?.kind === "lens" ? lensAxesOf().find((a) => a.kind === selection.axis) : undefined;
+
+function addLensAxis(kind) {
+  snapshot();
+  film.lensAxes = film.lensAxes ?? [];
+  if (film.lensAxes.some((a) => a.kind === kind)) return status(`${kind} is already on the timeline.`);
+  film.lensAxes.push({
+    kind, target: kind,
+    keys: [{ frame: 0, position: 0.5 }, { frame: film.durationFrames, position: 0.5 }],
+  });
+  film.lensAxes.sort((a, b) => LENS_AXES.findIndex((d) => d.kind === a.kind) - LENS_AXES.findIndex((d) => d.kind === b.kind));
+  uploaded = false;
+  refreshLens(); syncInputs(); render();
+  status(`${kind} lane added — mark the lens in ⌾ Lens… to see real units.`);
+}
+
+function removeLensAxis(kind) {
+  snapshot();
+  film.lensAxes = lensAxesOf().filter((a) => a.kind !== kind);
+  if (!film.lensAxes.length) delete film.lensAxes;
+  selection = null;
+  refreshLens(); updateInspector(); syncInputs(); render();
+}
+
+let lensTimer = null;
+function refreshLens() {
+  clearTimeout(lensTimer);
+  lensTimer = setTimeout(async () => {
+    try { lensCache = await window.nmx.previewLens(film); }
+    catch { lensCache = null; }
+    render();
+  }, 50);
+}
+
+function updateLensInspector() {
+  const ax = selectedLens();
+  const key = ax?.keys[selection.k];
+  if (!ax || !key) { selection = null; $("lensFields").style.display = "none"; $("kfEmpty").style.display = ""; return; }
+  $("kfEmpty").style.display = "none";
+  $("kfFields").style.display = "none";
+  $("cueFields").style.display = "none";
+  $("lensFields").style.display = "flex";
+  const end = selection.k === 0 || selection.k === ax.keys.length - 1;
+  $("lensLabel").textContent = `${ax.kind} · key ${selection.k + 1}/${ax.keys.length}${end ? " (endpoint)" : ""}`;
+  $("lensFrame").value = String(key.frame);
+  $("lensTc").textContent = tcOf(key.frame);
+  $("lensPct").value = String(Math.round(key.position * 100));
+  $("lensValue").textContent = formatLens(ax, key.position);
+  $("lensFrame").disabled = end;
+  $("lensDelete").disabled = end;
+}
+
+$("lensFrame").onchange = () => {
+  const ax = selectedLens(); if (!ax) return;
+  const k = selection.k;
+  if (k === 0 || k === ax.keys.length - 1) return;
+  snapshot();
+  ax.keys[k].frame = Math.max(ax.keys[k - 1].frame + MIN_GAP,
+    Math.min(ax.keys[k + 1].frame - MIN_GAP, Math.round(Number($("lensFrame").value))));
+  updateLensInspector(); refreshLens();
+};
+$("lensPct").onchange = () => {
+  const ax = selectedLens(); if (!ax) return;
+  snapshot();
+  ax.keys[selection.k].position = Math.max(0, Math.min(1, Number($("lensPct").value) / 100));
+  updateLensInspector(); refreshLens();
+};
+$("lensDelete").onclick = () => {
+  const ax = selectedLens(); if (!ax) return;
+  const k = selection.k;
+  if (k === 0 || k === ax.keys.length - 1) return;
+  snapshot(); ax.keys.splice(k, 1); selection = null;
+  updateInspector(); refreshLens();
+};
+
+/* ---------------- lens marks modal ---------------- */
+
+function renderLensMarks() {
+  const ax = selectedLens() ?? lensAxesOf()[0];
+  if (!ax) return;
+  $("lensMapKind").textContent = ax.kind;
+  $("lensMapName").value = ax.map?.name ?? "";
+  $("lensInvert").checked = Boolean(ax.invert);
+  const unit = ax.kind === "iris" ? "T" : ax.kind === "zoom" ? "mm" : "m";
+  const marks = ax.map?.marks ?? [];
+  $("lensMarkRows").innerHTML = marks.length
+    ? marks.map((m, i) => `
+      <div class="bind">
+        <span class="tcread">${Math.round(m.position * 100)}% travel</span>
+        <span class="tcread">${m.value}${unit}</span>
+        <span class="tcread">${m.label ?? ""}</span>
+        <span></span>
+        <button data-markdel="${i}" title="Remove">✕</button>
+      </div>`).join("")
+    : `<div style="font-size:10.5px;color:var(--ink-faint)">No marks — the lane reads in percent.</div>`;
+  $("lensMarkRows").querySelectorAll("[data-markdel]").forEach((el) => el.onclick = () => {
+    snapshot();
+    ax.map.marks.splice(+el.dataset.markdel, 1);
+    if (ax.map.marks.length < 2) delete ax.map;   // fewer than 2 cannot interpolate
+    renderLensMarks(); refreshLens(); updateInspector();
+  });
+}
+
+$("lensMarks").onclick = () => { renderLensMarks(); $("lensModal").classList.add("open"); };
+
+$("lensAddMark").onclick = () => {
+  const ax = selectedLens() ?? lensAxesOf()[0];
+  if (!ax) return;
+  snapshot();
+  ax.map = ax.map ?? { name: $("lensMapName").value.trim() || `${ax.kind} lens`, kind: ax.kind, marks: [] };
+  const pos = Math.max(0, Math.min(1, Number($("lensNewPos").value) / 100));
+  ax.map.marks = ax.map.marks.filter((m) => Math.abs(m.position - pos) > 1e-6);
+  ax.map.marks.push({ position: pos, value: Number($("lensNewVal").value), ...( $("lensNewLabel").value.trim() ? { label: $("lensNewLabel").value.trim() } : {}) });
+  ax.map.marks.sort((a, b) => a.position - b.position);
+  $("lensNewLabel").value = "";
+  renderLensMarks(); refreshLens(); updateInspector(); render();
+};
+
+$("lensMapName").onchange = () => { const ax = selectedLens() ?? lensAxesOf()[0]; if (ax?.map) { ax.map.name = $("lensMapName").value.trim(); } };
+$("lensInvert").onchange = () => {
+  const ax = selectedLens() ?? lensAxesOf()[0]; if (!ax) return;
+  snapshot(); ax.invert = $("lensInvert").checked; refreshLens(); updateInspector(); render();
+};
+$("lensRemoveAxis").onclick = () => {
+  const ax = selectedLens() ?? lensAxesOf()[0]; if (!ax) return;
+  removeLensAxis(ax.kind);
+  $("lensModal").classList.remove("open");
+};
+
+$("lensAdd").onchange = () => {
+  const kind = $("lensAdd").value;
+  $("lensAdd").value = "";
+  if (kind) addLensAxis(kind);
+};
 
 /* ---------------- cues (ADR-0016) ---------------- */
 
@@ -1113,9 +1488,18 @@ $("tlDuration").onchange = () => {
     }
     ax.points[ax.points.length - 1].frame = Math.min(ax.points[ax.points.length - 1].frame, dur);
   }
+  /* Lens keys rescale with everything else — a focus pull is timed to the move,
+     not to the wall clock, so stretching the move stretches the pull. */
+  for (const ax of lensAxesOf()) {
+    for (const k of ax.keys) k.frame = Math.round(k.frame * sc);
+    for (let i = 1; i < ax.keys.length; i++) {
+      if (ax.keys[i].frame <= ax.keys[i - 1].frame) ax.keys[i].frame = ax.keys[i - 1].frame + MIN_GAP;
+    }
+    if (ax.keys.length) ax.keys[ax.keys.length - 1].frame = Math.min(ax.keys[ax.keys.length - 1].frame, dur);
+  }
   film.durationFrames = dur;
   playheadFrame = Math.min(playheadFrame, dur);
-  syncInputs(); frameAll(); refreshPreview();
+  syncInputs(); frameAll(); refreshPreview(); refreshLens();
 };
 $("tlCue").onchange = () => { film.cueFrames = Math.max(0, Math.round(Number($("tlCue").value))); syncInputs(); };
 $("tlStartTc").onchange = () => {
@@ -1143,10 +1527,27 @@ $("tlTimebase").onchange = () => {
       if (ax.points[k].frame <= ax.points[k - 1].frame) ax.points[k].frame = ax.points[k - 1].frame + MIN_GAP;
     }
   }
+  for (const ax of lensAxesOf()) {
+    for (const k of ax.keys) k.frame = TC.retimeFrames(k.frame, from, tb);
+    for (let i = 1; i < ax.keys.length; i++) {
+      if (ax.keys[i].frame <= ax.keys[i - 1].frame) ax.keys[i].frame = ax.keys[i - 1].frame + MIN_GAP;
+    }
+  }
+  /* Rounding + MIN_GAP can push a last key one frame past the retimed duration.
+     Clamp every lane's tail, or validateLensAxis/validateFilm rejects the upload
+     later with an error the operator did nothing to cause. */
+  for (const ax of film.axes) {
+    const last = ax.points[ax.points.length - 1];
+    if (last) last.frame = Math.min(last.frame, film.durationFrames);
+  }
+  for (const ax of lensAxesOf()) {
+    const last = ax.keys[ax.keys.length - 1];
+    if (last) last.frame = Math.min(last.frame, film.durationFrames);
+  }
   playheadFrame = TC.retimeFrames(playheadFrame, from, tb);
   film.timebase = { ...tb };
   uploaded = false;
-  syncInputs(); frameAll(); refreshPreview();
+  syncInputs(); frameAll(); refreshPreview(); refreshLens();
   status(`Timebase ${TC.timebaseLabel(tb)} — move retimed to ${film.durationFrames} frames, same real duration.`);
 };
 $("moveName").onchange = () => { film.name = $("moveName").value; };
@@ -1154,7 +1555,7 @@ $("moveName").onchange = () => { film.name = $("moveName").value; };
 function adopt(f, path = null) {
   film = f; undoStack.length = 0; redoStack.length = 0; selection = null;
   filePath = path; dirty = false;
-  updateInspector(); syncInputs(); playheadFrame = 0; frameAll(); refreshPreview();
+  updateInspector(); syncInputs(); playheadFrame = 0; frameAll(); refreshPreview(); refreshLens();
 }
 
 function markDirty() { dirty = true; updateFileLabel(); }
@@ -1311,7 +1712,15 @@ $("exGo").onclick = async () => {
 $("tlUpload").onclick = async () => {
   try {
     const n = await window.nmx.uploadKf(film);
-    uploaded = true; status(`Uploaded to controller (${n} packets). Ready to run.`);
+    uploaded = true;
+    /* Say the quiet part. The NMX has no lens channel and no FIZ device exists
+       yet (ADR-0017 §4), so a focus pull on the timeline goes nowhere on this
+       pass. An operator who assumed otherwise finds out on the rushes. */
+    const lens = lensAxesOf().map((a) => a.kind).join(" · ");
+    status(
+      `Uploaded to controller (${n} packets). Ready to run.` +
+        (lens ? `  \u2014 ${lens} NOT sent: no lens device. Pull by hand or match in post.` : ""),
+    );
   } catch (e) { status("Upload blocked: " + e.message); }
 };
 $("tlGotoStart").onclick = async () => {
@@ -1421,6 +1830,26 @@ window.addEventListener("keydown", (e) => {
   if (e.key === "f" || e.key === "Home") { e.preventDefault(); return frameAll(); }
   if (e.key === " ") { e.preventDefault(); return $("tlRun").click(); }
   if (e.key === "c" || e.key === "C") { e.preventDefault(); return addCue(); }
+  if (selection?.kind === "lens") {
+    const ax = selectedLens();
+    const key = ax?.keys[selection.k];
+    if (!key) return;
+    const end = selection.k === 0 || selection.k === ax.keys.length - 1;
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      e.preventDefault(); snapshot();
+      key.position = Math.max(0, Math.min(1, key.position + (e.key === "ArrowUp" ? 1 : -1) * (e.shiftKey ? 0.05 : 0.01)));
+      updateLensInspector(); refreshLens(); return;
+    }
+    if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && e.altKey && !end) {
+      e.preventDefault(); snapshot();
+      const stepF = e.shiftKey ? Math.round(TC.fpsDecimal(film.timebase)) : 1;
+      key.frame = Math.max(ax.keys[selection.k - 1].frame + MIN_GAP,
+        Math.min(ax.keys[selection.k + 1].frame - MIN_GAP, key.frame + (e.key === "ArrowRight" ? stepF : -stepF)));
+      updateLensInspector(); refreshLens(); return;
+    }
+    if ((e.key === "Backspace" || e.key === "Delete") && !end) { e.preventDefault(); return $("lensDelete").click(); }
+    return;
+  }
   if (selection?.kind === "cue") {
     const ev = selectedCue();
     if (!ev) return;

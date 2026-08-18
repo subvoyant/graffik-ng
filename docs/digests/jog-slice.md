@@ -1,6 +1,6 @@
 # Digest: apps/jog-slice (Electron app)
 
-**Verified against** `apps/jog-slice/*` @ 2026-08-17 (v0.9) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
+**Verified against** `apps/jog-slice/*` @ 2026-08-18 (v0.10) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
 
 ## Shape
 
@@ -111,6 +111,18 @@ Layout is a fixed frame — appbar / rail(244px) / stage / statusbar — with **
 - **Measured jitter per pass (v0.9).** `reportCueDelivery()` runs when a pass completes and logs `N cues fired · worst lateness M ms (host-timed)`, naming any cue more than 40 ms late. Tier 1's caveat becomes something the operator watches rather than something a document claims.
 - **⚡ Cues… modal:** three transports — trigger board (the only Tier-2 path), **DMX** (Enttec port picker) and **OSC** (host/port/prefix) — plus the target bindings table with per-row test-fire. A binding can point at `simulated`/`serial`/`dmx`/`osc`. The tier chip turns green only on a real Tier-2 device, and the tier explanation lives in the dialog, not just the ADR.
 
+## Lens lanes — focus / iris / zoom (v0.10 — ADR-0017)
+
+- **Canvas geometry, updated.** `RULER(20) → CUE_LANE(22) → [GROUP_HEAD(15) → 3 motion tracks → GROUP_HEAD(15) → N lens tracks]`. The two `GROUP_HEAD` band strips only exist when `hasLens()`; with no lens lanes the layout is byte-for-byte the old three-track one. `rowCount()`/`rowHeight()`/`motionTop()`/`lensTop()`/`lensRect(i)` are the only places this is computed — do not re-derive it.
+- **Colour is faceted, not extended.** A six-slot categorical palette FAILED all-pairs CVD validation (magenta↔aqua ΔE 1.6 deutan; yellow↔orange ΔE 10.6 normal), so lens lanes **reuse validated slots 1–3** (`--slide`/`--pan`/`--tilt`) inside their own labelled band. Per ADR-0012 the answer to "I need more series colours" is faceting. Identity comes from the band + the rotated per-lane label, never colour alone.
+- **Lens tracks use a FIXED 0..1 scale** (motion tracks auto-scale). That makes the shape of a pull comparable between takes — and because the scale is fixed and load-bearing, both ends are labelled. `lensEndLabel()` prefers the **mark's engraving** (`∞`) over the map's number (`60.0m`), since the number claims precision the barrel never had. Quarter guides instead of a zero line: a lens has no natural zero.
+- **The live value is drawn AT the playhead**, on the line it describes, in the lane colour, flipping side near the right edge. It was originally pinned to the track's top-right corner, where it read as a scale label and collided with any key on the last frame — a headless-render pass caught that.
+- `selection = {kind:"key"|"cue"|"lens", …}`; the one rail inspector serves all three. **Every `selection.track` read must guard on `kind === "key"`.**
+- **⌾ Lens… modal** (from the inspector) holds the lens name, the marks table (travel % → reading → barrel label), an add-mark row, `invert`, and Remove lane. Marks live in the **move file**, not yet in a reusable per-lens library.
+- `nmx:preview-lens` samples the lanes in main via the core solver, debounced 50 ms into `lensCache`, exactly like `previewMove`. The browser-preview stub has a crude smoothstep copy for layout only — never extend it.
+- Lens keys **retime** with duration and timebase changes, and the retimed tail is clamped to `durationFrames` (rounding + `MIN_GAP` could otherwise push it one frame past and get the upload rejected).
+- **Disclosure, not implication:** the band reads `(authoring + export only — no lens device yet)` and Upload appends `focus · iris NOT sent: no lens device`. Nothing drives a lens motor until ADR-0017 §4 is built.
+
 ## Move files vs. export (v0.7.1)
 
 These are **two different commands and must stay that way** — conflating them is what made the first pass confusing.
@@ -154,4 +166,4 @@ Settings live in `prefs.export` — **calibration is a property of the rig, not 
 
 ## Known gaps (intentional)
 
-Per-axis classic arm params; KF `updateRateMs` not exposed; no per-keyframe easing/tangent handles (the solver picks velocities — ADR-0009); no panel resizing/docking; no light theme; gamepad **button** bindings (only axes are mappable — no e-stop-on-button yet); limits are per-axis boxes, not a swept-volume/collision model. (Simulator animates progress +20%/poll so demo passes complete — see nmx-protocol digest.)
+Per-axis classic arm params; KF `updateRateMs` not exposed; no per-keyframe easing/tangent handles (the solver picks velocities — ADR-0009); no panel resizing/docking; no light theme; **no lens motor driver** (lanes author + export only — ADR-0017 §4); no per-lens map library (maps live in the move file); a 7th lane would need scrolling tracks — six is the height budget; gamepad **button** bindings (only axes are mappable — no e-stop-on-button yet); limits are per-axis boxes, not a swept-volume/collision model. (Simulator animates progress +20%/poll so demo passes complete — see nmx-protocol digest.)

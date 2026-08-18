@@ -16,9 +16,10 @@ import { AxisIndex } from "./move.js";
 import {
   Timebase, DEFAULT_TIMEBASE, validateTimebase, framesToMs, msToFrames, framesToTimecode,
 } from "./timecode.js";
+import { LensAxis, validateLensAxis } from "./lens.js";
 
 export const FILM_FORMAT = "graffik-ng-move";
-export const FILM_VERSION = 2;
+export const FILM_VERSION = 3;
 
 export interface FilmPoint {
   /** Whole frames from the start of the move. */
@@ -78,6 +79,15 @@ export interface Film {
   /** "classic" = 2-point program engine; "keyframe" = KF engine. */
   engine: "classic" | "keyframe";
   axes: FilmAxis[];
+  /**
+   * Lens axes — focus / iris / zoom (ADR-0017). Separate from `axes` because
+   * they are a different kind of thing: `axes` are NMX motors measured in
+   * steps and uploaded to firmware; these are normalised barrel travel driven
+   * by something else entirely. Folding them into one array would have made
+   * every existing consumer — soft limits, the KF upload, the 3D sampler —
+   * start asking "which sort of axis is this?".
+   */
+  lensAxes?: LensAxis[];
   /** Timeline cues (ADR-0016). Optional so v2 files predating cues still load. */
   events?: FilmEvent[];
   /** ISO timestamp of last save (informational only). */
@@ -123,6 +133,12 @@ export function migrateFilm(raw: unknown): Film {
     throw new Error(`file version ${version} is newer than this app understands (${FILM_VERSION})`);
   }
   if (version === FILM_VERSION) return f as unknown as Film;
+
+  /* v2 -> v3: v3 only ADDS optional `lensAxes`, so a v2 file is already a valid
+     v3 one. The version still went up rather than the field going in quietly:
+     a v0.9 build loading a v3 file must REFUSE it, because silently dropping a
+     focus pull on save is precisely the data loss versioning exists to stop. */
+  if (version === 2) return { ...(f as unknown as Film), version: FILM_VERSION };
 
   // ---- v1 (milliseconds, no timebase) ----
   const tb = DEFAULT_TIMEBASE;
@@ -183,6 +199,18 @@ export function validateFilm(f: Film): void {
     }
   }
   validateEvents(f);
+  validateLensAxes(f);
+}
+
+export function validateLensAxes(f: Film): void {
+  if (f.lensAxes === undefined) return;
+  if (!Array.isArray(f.lensAxes)) throw new Error("lensAxes must be an array");
+  const seen = new Set<string>();
+  for (const ax of f.lensAxes) {
+    if (seen.has(ax.kind)) throw new Error(`duplicate lens axis: ${ax.kind}`);
+    seen.add(ax.kind);
+    validateLensAxis(ax, f.durationFrames);
+  }
 }
 
 const EVENT_KINDS = new Set(["pulse", "level", "camera", "dmx", "midi", "osc"]);
