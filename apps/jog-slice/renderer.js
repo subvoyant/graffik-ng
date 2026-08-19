@@ -124,6 +124,24 @@ if (!window.nmx) {
     lensLibraryDelete: async () => 0,
     lensLibraryExport: async () => null,
     lensLibraryImport: async () => null,
+    commissionState: async () => ({
+      spans: { slide: [{ steps: 80000, measured: 500, note: "steel rule" }, { steps: 64000, measured: 400 }], pan: [], tilt: [] },
+      marked: { slide: null, pan: null, tilt: null },
+      passes: [0, 0.02, -0.03, 0.01, -0.01], thresholdMm: 0.1,
+      fits: {
+        slide: { perUnit: 160, n: 2, spreadPct: 0, worst: null, warnings: [], unit: "mm", stored: 100, diagnosis: "+60.0% against the stored value — something mechanical changed, or one of the two was measured badly" },
+        pan: { perUnit: 0, n: 0, spreadPct: 0, worst: null, warnings: ["no usable measurements yet"], unit: "deg", stored: 100, diagnosis: null },
+        tilt: { perUnit: 0, n: 0, spreadPct: 0, worst: null, warnings: ["no usable measurements yet"], unit: "deg", stored: 100, diagnosis: null },
+      },
+      repeatability: { n: 5, meanMm: 0, maxAbsMm: 0.03, spreadMm: 0.05, pass: true, verdict: "pass — worst 0.03 mm, spread 0.05 mm over 5 passes" },
+      calibration: { slideStepsPerMm: 100, panStepsPerDeg: 100, tiltStepsPerDeg: 100, nodalOffsetMm: 0, headHeightMm: 0 },
+    }),
+    commissionMark: async () => 0,
+    commissionSpan: async () => { throw new Error("browser preview — no rig"); },
+    commissionDropSpan: async () => ({ perUnit: 0, n: 0, warnings: [] }),
+    commissionApply: async () => ({ applied: [], skipped: [] }),
+    commissionPass: async () => ({ passes: [], result: { verdict: "browser preview" } }),
+    commissionSet: async (p) => p,
     exportFormats: async () => [
       { id: "usda", label: "OpenUSD (.usda)", ext: "usda", note: "Cinema 4D, Blender, Houdini, Maya, Unreal. Carries its own units and up-axis." },
       { id: "abc", label: "Alembic + FBX (via Blender)", ext: "usda", note: "Writes the .usda plus a Blender script that converts it." },
@@ -368,7 +386,14 @@ $("enable").onclick = async () => { await window.nmx.enableMotors(); status("Mot
 setInterval(async () => {
   if (!connected) return;
   for (const a of AXES) {
-    try { $("pos" + a.motor).textContent = String(await window.nmx.position(a.motor)); } catch { /* transient */ }
+    try {
+      const p = String(await window.nmx.position(a.motor));
+      $("pos" + a.motor).textContent = p;
+      /* The rig panel's rows are rebuilt on every render, so look them up each
+         tick rather than caching a node that may no longer be in the document. */
+      const rp = document.getElementById("rigPos" + a.motor);
+      if (rp) rp.textContent = p;
+    } catch { /* transient */ }
   }
 }, 400);
 
@@ -1247,6 +1272,215 @@ $("lensAddMark").onclick = () => {
 };
 
 $("lensMapName").onchange = () => { const ax = selectedLens() ?? lensAxesOf()[0]; if (ax?.map) { ax.map.name = $("lensMapName").value.trim(); } };
+/* ------------------------------------------------------------------
+   Rig commissioning (ADR-0020)
+
+   The panel carries its OWN jog buttons. The procedure is jog-to-a-mark,
+   walk away with a tape, come back and type — so a dialog that covered the
+   rail's jog controls would make the thing it exists for impossible.
+   ------------------------------------------------------------------ */
+
+const RIG_AXES = [
+  { key: "slide", name: "Slide", motor: 1, unit: "mm",  color: css.getPropertyValue("--slide").trim() },
+  { key: "pan",   name: "Pan",   motor: 2, unit: "deg", color: css.getPropertyValue("--pan").trim() },
+  { key: "tilt",  name: "Tilt",  motor: 3, unit: "deg", color: css.getPropertyValue("--tilt").trim() },
+];
+let rigState = null;
+let rigAxis = "slide";
+let rigUnitShown = null;
+
+function rigJogWiring() {
+  for (const b of document.querySelectorAll("#rigAxes .jogbtn")) {
+    const m = +b.dataset.m, d = +b.dataset.d;
+    const go = async (e) => {
+      e.preventDefault(); if (!connected) return;
+      const r = await window.nmx.jog(m, d * Number($("speed").value));
+      if (r?.blocked) status(`⚠ ${AXES[m - 1].name} is at its soft limit.`);
+    };
+    const stop = async () => { if (connected) await window.nmx.jog(m, 0); renderRig(); };
+    b.addEventListener("pointerdown", go);
+    b.addEventListener("pointerup", stop);
+    b.addEventListener("pointerleave", stop);
+  }
+}
+
+async function refreshRig() {
+  try { rigState = await window.nmx.commissionState(); }
+  catch (e) { rigState = null; status("Rig state unavailable: " + e.message); }
+  renderRig();
+}
+
+function renderRig() {
+  if (!rigState) return;
+  const sel = RIG_AXES.find((a) => a.key === rigAxis);
+  $("rigUnit").textContent = sel.unit === "mm" ? "mm" : "degrees";
+  /* Carry a sensible default across an axis change. "500 degrees" is nonsense
+     left over from the slide, and a nonsense default is one an operator
+     eventually records without reading. */
+  if (rigUnitShown !== sel.unit) {
+    rigUnitShown = sel.unit;
+    $("rigMeasured").value = sel.unit === "mm" ? "500" : "90";
+    $("rigNote").placeholder = sel.unit === "mm" ? "steel rule, 2nd read" : "inclinometer";
+  }
+
+  $("rigAxes").innerHTML = RIG_AXES.map((a) => {
+    const marked = rigState.marked[a.key];
+    const f = rigState.fits[a.key];
+    const on = a.key === rigAxis;
+    /* The live position matters here more than anywhere: the panel carries its
+       own jog buttons so the whole procedure happens in one place, and jogging
+       without seeing where you are is exactly the thing that made a separate
+       dialog unusable in the first place. */
+    return `
+      <div class="bind" style="grid-template-columns:3px 12px 44px 26px 26px 82px 116px 1fr;${on ? "" : "opacity:.62"}">
+        <span style="width:3px;height:16px;border-radius:2px;background:${on ? a.color : "transparent"}"></span>
+        <span class="swatch" style="background:${a.color}"></span>
+        <span class="nm" style="color:${on ? "var(--ink)" : "var(--ink-dim)"}">${a.name}</span>
+        <button class="jogbtn" data-m="${a.motor}" data-d="-1">−</button>
+        <button class="jogbtn" data-m="${a.motor}" data-d="1">+</button>
+        <span class="tcread" id="rigPos${a.motor}" style="text-align:right">—</span>
+        <button data-rigmark="${a.key}">${marked === null || marked === undefined ? "Mark start" : `Close from ${marked}`}</button>
+        <span class="tcread">${f.n ? `${f.perUnit.toFixed(2)} ${a.unit === "mm" ? "st/mm" : "st/°"}` : "not measured"}</span>
+      </div>`;
+  }).join("");
+  rigJogWiring();
+
+  for (const el of $("rigAxes").querySelectorAll("[data-rigmark]")) {
+    el.onclick = async () => {
+      const key = el.dataset.rigmark;
+      rigAxis = key; renderRig();
+      const marked = rigState.marked[key];
+      try {
+        if (marked === null || marked === undefined) {
+          const at = await window.nmx.commissionMark(key);
+          status(`${key} marked at ${at} steps — now jog to the far mark and measure the distance.`);
+        } else {
+          await window.nmx.commissionSpan(key, Number($("rigMeasured").value), $("rigNote").value.trim());
+          $("rigNote").value = "";
+          status(`${key} span recorded.`);
+        }
+      } catch (e) { status("Rig: " + e.message); }
+      await refreshRig();
+    };
+  }
+
+  /* Spans for the SELECTED axis only — three tables of two rows each would be
+     mostly empty space, and the operator is working one axis at a time. */
+  const spans = rigState.spans[rigAxis] ?? [];
+  /* Naming the axis is not decoration: this table shows ONE axis's spans and
+     nothing else on screen says which, so without it two measurements look
+     like they belong to whatever was clicked last. */
+  $("rigSpansHead").textContent = `${sel.name} spans — steps · measured · derived`;
+  $("rigSpans").innerHTML = spans.length
+    ? spans.map((o, i) => `
+      <div class="bind" style="grid-template-columns:1fr 1fr 1fr 26px">
+        <span class="tcread">${o.steps} steps</span>
+        <span class="tcread">${o.measured} ${sel.unit === "mm" ? "mm" : "°"}</span>
+        <span class="tcread">${(Math.abs(o.steps / o.measured)).toFixed(2)}${o.note ? ` · ${o.note}` : ""}</span>
+        <button data-rigdrop="${i}" title="Remove this measurement">✕</button>
+      </div>`).join("")
+    : `<div style="font-size:10.5px;color:var(--ink-faint)">No spans for ${rigAxis} yet.</div>`;
+  for (const el of $("rigSpans").querySelectorAll("[data-rigdrop]")) {
+    el.onclick = async () => { await window.nmx.commissionDropSpan(rigAxis, +el.dataset.rigdrop); await refreshRig(); };
+  }
+
+  const f = rigState.fits[rigAxis];
+  const lines = [];
+  if (f.n) {
+    lines.push(`<b>${f.perUnit.toFixed(3)}</b> ${sel.unit === "mm" ? "steps/mm" : "steps/°"} from ${f.n} span${f.n === 1 ? "" : "s"}, spread ${f.spreadPct.toFixed(2)}%`);
+    if (f.worst) lines.push(`outlier: ${f.worst.steps} steps / ${f.worst.measured}${sel.unit === "mm" ? "mm" : "°"}${f.worst.note ? ` (${f.worst.note})` : ""}`);
+    if (f.diagnosis) lines.push(`⚠ ${f.diagnosis}`);
+  }
+  lines.push(...f.warnings.map((w) => `⚠ ${w}`));
+  $("rigFit").innerHTML = lines.join("<br>");
+
+  /* Wire the laser method for rotation. It existed in the core with tests and
+     no way to reach it, which is the same failure as a test that asserts
+     nothing: capability the app claims and does not offer. */
+  const rotational = sel.unit === "deg";
+  $("rigLaserRow").style.display = rotational ? "" : "none";
+  if (rotational) refreshLaser();
+
+  $("rigNodal").value = String(rigState.calibration.nodalOffsetMm ?? 0);
+  $("rigHead").value = String(rigState.calibration.headHeightMm ?? 0);
+  $("rigThreshold").value = String(rigState.thresholdMm);
+
+  const rep = rigState.repeatability;
+  $("rigPasses").innerHTML =
+    (rigState.passes.length
+      ? `${rigState.passes.map((v) => v.toFixed(2)).join(" · ")} mm<br>`
+      : "") +
+    `<span style="color:${rep.pass && rep.n >= 5 ? "var(--ok)" : rep.n ? "var(--warn)" : "var(--ink-faint)"}">${rep.verdict}</span>`;
+}
+
+/** atan, mirrored from the core for display only — the recorded value is the
+    number that lands in the Measured field, and that is what gets fitted. */
+function refreshLaser() {
+  const off = Number($("rigLaserOffset").value), dist = Number($("rigLaserDist").value);
+  const deg = dist === 0 ? 0 : (Math.atan(off / dist) * 180) / Math.PI;
+  $("rigLaserDeg").textContent = `${deg.toFixed(2)}°`;
+  const abs = Math.abs(deg);
+  $("rigLaserWarn").textContent =
+    abs > 25 ? "past where “start square to the wall” is safe — use an inclinometer"
+    : abs < 5 ? "small angle — move further or stand the wall further away"
+    : "";
+}
+$("rigLaserOffset").oninput = $("rigLaserDist").oninput = refreshLaser;
+$("rigLaserUse").onclick = () => {
+  refreshLaser();
+  $("rigMeasured").value = $("rigLaserDeg").textContent.replace("°", "");
+  if (!$("rigNote").value.trim()) $("rigNote").value = `laser ${$("rigLaserOffset").value}mm @ ${$("rigLaserDist").value}mm`;
+  status("Angle filled in — now close the span on the axis you rotated.");
+};
+
+$("exMeasure").onclick = async () => { await refreshRig(); $("rigModal").classList.add("open"); };
+
+/* The rig panel writes main's copy of the calibration; the export dialog holds
+   its OWN copy in `exPrefs` and writes it back wholesale on any field change.
+   Without this merge the next keystroke in the export dialog would quietly
+   overwrite the numbers that were just measured. */
+function adoptCalibration(calibration) {
+  if (!calibration) return;
+  exPrefs.calibration = { ...exPrefs.calibration, ...calibration };
+  syncExportUi();
+}
+
+$("rigApply").onclick = async () => {
+  try {
+    const r = await window.nmx.commissionApply();
+    adoptCalibration(r.calibration);
+    await refreshRig();
+    status(r.applied.length
+      ? `Calibration updated — ${r.applied.join(", ")}${r.skipped.length ? `. Still unmeasured: ${r.skipped.join(", ")}.` : ""}`
+      : "Nothing measured yet — mark a start, jog, and record a span first.");
+  } catch (e) { status("Apply failed: " + e.message); }
+};
+
+$("rigNodal").onchange = $("rigHead").onchange = async () => {
+  try {
+    const r = await window.nmx.commissionSet({
+      nodalOffsetMm: Number($("rigNodal").value), headHeightMm: Number($("rigHead").value),
+    });
+    adoptCalibration(r.calibration);
+    await refreshRig();
+  } catch (e) { status("Rig: " + e.message); }
+};
+
+$("rigThreshold").onchange = async () => {
+  await window.nmx.commissionSet({ thresholdMm: Number($("rigThreshold").value) });
+  await refreshRig();
+};
+
+$("rigAddPass").onclick = async () => {
+  try {
+    const r = await window.nmx.commissionPass(Number($("rigReading").value));
+    await refreshRig();
+    logPass(`repeatability pass ${r.passes.length}: ${Number($("rigReading").value).toFixed(2)} mm — ${r.result.verdict}`);
+  } catch (e) { status("Rig: " + e.message); }
+};
+
+$("rigClearPasses").onclick = async () => { await window.nmx.commissionPass(null); await refreshRig(); };
+
 /* ---- the lens library: marks belong to a LENS, not a move (ADR-0019) ---- */
 
 let lensLib = [];

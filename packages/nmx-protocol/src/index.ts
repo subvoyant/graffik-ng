@@ -12,3 +12,4 @@ export * from "./trigger.js";
 export * from "./dmx.js";
 export * from "./osc.js";
 export * from "./lens.js";
+export * from "./commission.js";

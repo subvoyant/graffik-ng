@@ -142,6 +142,16 @@ numbers are measured, a 3D export (ADR-0015) is a *shape*, not a camera move.
 Measure once per mechanical configuration, and re-measure after changing a belt,
 a pulley, a gearbox, or the driver's microstep setting.
 
+> **Use the app: Export 3D… → Measure…** (ADR-0020). The panel has its own jog
+> buttons and live step readout, so the whole procedure happens in one place: jog
+> to a mark, press **Mark start**, jog to the far mark, type what the tape said,
+> press **Close from …**. It does the arithmetic, keeps every span, reports how
+> much your measurements disagree, and refuses to guess which one is wrong until
+> you have given it three. **Use these numbers** writes the result straight into
+> the export calibration.
+>
+> The sections below are what the panel is doing, and what to do with a tape.
+
 ### 6.1 Slide — steps per millimetre
 
 1. Jog the carriage to one end of safe travel. Note the reported position, `p₀`.
@@ -162,8 +172,14 @@ Use the longest travel you can: the measurement error is fixed (~0.5 mm), so a
 Rotation is harder to measure well than translation, and a 1% error over a 90°
 pan is nearly a degree of drift by the end of the move.
 
-1. Put a **digital inclinometer** on the head (for tilt) or use a printed
-   360° protractor taped under the pan axis with a pointer on the rotating part.
+1. Best: a **digital inclinometer** on the head (for tilt).
+   Next best, and better than a protractor: the **laser method the panel offers**
+   — point a laser square at a wall a measured distance away, mark the dot,
+   rotate, mark again, measure between the marks. The panel turns that into
+   degrees and warns you past 25°, where "started square to the wall" stops
+   being a free assumption.
+   A printed protractor taped under the pan axis is the fallback, and it is not
+   a measuring instrument.
 2. Zero it. Note the reported position, `p₀`.
 3. Rotate as far as the rig allows — **90° or more**. Note `p₁` and the angle.
 
@@ -301,3 +317,23 @@ steps — reduce top speed or increase current before trusting it in a composite
       and must not go slack
 - [ ] power-cycle the board mid-session: the app must refuse to run until the
       axis is recalibrated, and say so
+
+
+## Where the numbers live
+
+Everything measured in Phases 3, 6 and 7 is kept in the app's preferences, not
+in a notebook:
+
+| what | where | why it is kept |
+|---|---|---|
+| calibration spans | Export 3D… → Measure… | so "which measurement gave us 160?" is answerable |
+| steps/mm, steps/° | export calibration | the 3D export reads these directly |
+| nodal offset, head height | same panel | scene placement; ignoring nodal is why CG slides on tilts |
+| repeatability readings | same panel | five passes, judged against a limit you set |
+| lens marks | ⌾ Lens… → Library | marked once per lens, not once per move (ADR-0019) |
+| lens motor travel + top speed | ⌾ Lens… → Motor | travel is a hint only; the board re-homes each power-up |
+| soft limits | rail, taught by jogging | enforced main-side, never by the renderer (ADR-0013) |
+
+If you re-measure and the app says a number is a clean power of two away from
+the stored one, believe it: that is the driver's microstep jumper, not the rig.
+A factor of ~100 is a unit slip. Both look entirely reasonable on their own.

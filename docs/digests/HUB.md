@@ -9,8 +9,9 @@
 ```
 graffik-ng/
 ├── packages/nmx-protocol/     # headless core — ALL protocol knowledge (zero runtime deps)
-│   └── src/ packet · commands · client · spline · move · film · limits · timecode · export3d · trigger · dmx · osc · lens · simulator
-│   └── test/ 264 tests: byte-exact vs firmware samples + e2e vs simulator + timecode/DF + export
+│   └── src/ packet · commands · client · spline · move · film · limits · timecode · export3d
+│            · trigger · dmx · osc · lens · commission · simulator
+│   └── test/ 290 tests: byte-exact vs firmware samples + e2e vs simulator + timecode/DF + export
 ├── packages/nmx-cli/          # headless runner: ports/info/run/stop for .graffik files
 ├── apps/jog-slice/            # Electron app (main.js / preload.cjs / index.html / renderer.js)
 │                              # jog + configurable gamepad · timeline editor (zoom/undo/select/nudge)
@@ -22,7 +23,7 @@ graffik-ng/
 │   └── test/ host shim + protocol-parity check vs the TS simulator — both in CI
 ├── scripts/check.sh           # everything CI runs, one command — use this, not a pasted block
 ├── .github/workflows/ci.yml   # test matrix (ubuntu+macos, `npm ci`) + firmware + parity + dmg on main
-└── docs/ adr/ (why, 0000-0019) + digests/ (how, you are here)
+└── docs/ adr/ (why, 0000-0020) + digests/ (how, you are here)
     + DECISIONS.md (running session log) + DEVELOPMENT.md (setup/daily-loop/troubleshooting)
     + HARDWARE-BRINGUP.md (first-contact + repeatability + rig calibration) + images/
 ```
@@ -45,7 +46,7 @@ Dataflow: renderer (vanilla JS UI) → `window.nmx` (preload contextBridge) → 
 12. Programmed moves are firmware-gated (v70) with explicit override only; jog speed hard-clamped ±4000 steps/s; cue countdown is host-side for both engines.
 13. Soft limits are enforced in the MAIN process (jog request + 90ms monitor + pre-upload validation), never the renderer (ADR-0013). Motion away from a violated bound must always stay allowed.
 14. **Frames are the authoring unit; milliseconds exist only at the protocol boundary** (ADR-0014). Rates are exact rationals — 23.976 is 24000/1001, never the decimal. Drop-frame is legal only at 29.97/59.94. Conversion happens in `filmDurationMs`/`filmCueMs`/`filmAxesToMs` and nowhere else.
-15. 3D export samples the SAME solver as the upload, once per frame, and states its own `metersPerUnit`/`upAxis` (ADR-0015). Steps→mm/deg needs a calibration MEASURED on the rig; without it an export is a shape, not a camera move.
+15. 3D export samples the SAME solver as the upload, once per frame, and states its own `metersPerUnit`/`upAxis` (ADR-0015). Steps→mm/deg needs a calibration MEASURED on the rig; without it an export is a shape, not a camera move. **Export 3D… → Measure… is how it gets measured** (ADR-0020) — spans, not absolute positions; the spread between spans IS the error bar.
 16. Anything that must be identical between passes cannot be timed by the host (ADR-0016, and ADR-0005 again). Host-scheduled cues are ±20 ms and non-repeatable; frame-exact cues must be uploaded to a device and triggered once.
 17. UI uses design tokens only — **no literal hex in new UI** (ADR-0012). Axis colors are validated for colorblind separation; a new series color comes from the next validated categorical slot, never invented. When the validator fails all-pairs, **facet** into labelled groups that reuse passing slots — never widen the palette past what passed.
 18. A lens position is a **fraction of barrel travel, 0..1** — never a distance (ADR-0017). Real units come from witness marks (`LensMap`); with no map the UI shows percent and the 3D export omits the axis rather than inventing one. Lens keys use the same solver as motion (ADR-0009) and retime with the move (ADR-0014).
@@ -79,6 +80,7 @@ Dataflow: renderer (vanilla JS UI) → `window.nmx` (preload contextBridge) → 
 - **Schema v4, one day after v3:** `lensAxes[].invert` was wrong in v3 — motor handedness is a fact about a rig, and a move file carrying it reverses somebody else's focus pull. It moved to preferences; the migration strips it and writes the fact into `notes` (ADR-0018 §5). Display, export and the wire program all got simpler, which is usually the sign.
 - **The firmware is no longer unverified.** Two checks, both in CI: a **host exercise** (shimmed `Arduino.h`, fake clock, a simulated barrel with hard stops that moves on STEP edges per the DIR pin) and a **protocol parity check** feeding one script to both the TS simulator and the C++ firmware and diffing the replies. Between them they found two real bugs on first run — `seekStop` backing off a stop in the wrong direction (every calibration would have reported zero travel), and the simulator accepting an axis index the board rejects.
 - **Done (v0.12, 2026-08-19):** **Lens library** (ADR-0019) — marks belong to a lens, not a move, so marking a barrel is done once instead of once per setup. Stored in preferences, picked from a kind-filtered dropdown in ⌾ Lens…, exported/imported as versioned `.graffiklens`. Merge matches on **id** (two people's "35mm" are different glass) and **reports** what it added, updated and rejected; one malformed entry does not sink a 150-lens file. Forgetting a lens never unmarks a move that is using it. 264 tests.
+- **Done (v0.13, 2026-08-19):** **Rig commissioning** (ADR-0020) — the app measures the rig instead of asking the operator to do arithmetic on a clipboard, which is what ADR-0015 had been waiting on for five versions. Measurements are **spans** (steps moved paired with what a rule said), never a least-squares line through absolute positions — a line's intercept absorbs backlash, and the spread between independent spans is the honest error bar. Below three spans the app refuses to name which one is wrong. Warns on short baselines with the arithmetic done, and diagnoses ADR-0015's two traps against the **stored** value (~×100 = unit slip, clean power of two = microstep jumper). Laser-on-a-wall method for rotation. Repeatability readings judged with **bias and scatter reported separately** — an offset is backlash and correctable, scatter is lost steps and is not. The panel carries its own jog buttons and live step readout. 290 tests.
 - **NEXT (software):** sustained-cue editing (drag the tail), cue duplication, a cue-preset library, MIDI last since every Node binding is native.
 - **NEXT (all hardware-gated):** first real-hardware contact — connect NMX, report firmware version (`docs/HARDWARE-BRINGUP.md` Phase 1); KF vs classic replay-fidelity test (ratifies ADR-0006); **tune the soft-limit margins** (250 ms lookahead / 90 ms poll are estimates — Phase 2); measure payload/speed ceilings with the cinema package on the slider; **measure the rig calibration** (steps/mm, steps/deg, nodal offset) — ADR-0015 export is untrustworthy until this exists. **Then Phase 7: the first lens motor** — StallGuard tuning, calibration stability across three runs, measured top speed, and a five-pass repeatability check on the barrel. Hardware-free backlog: tagged release with .dmg, Windows CI job, Apple Developer ID signing/notarization env, gamepad **button** bindings (e-stop on a button).
 - **Rail height budget is spent** — the next always-visible rail panel breaks the no-page-scroll rule. New configuration goes in a modal (see jog-slice digest). **Stage height budget is now spent too**: six tracks (3 motion + 3 lens) at 1440×880 is verified by headless render; a seventh lane needs scrolling tracks, which is a real design change.

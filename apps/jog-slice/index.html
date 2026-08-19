@@ -581,6 +581,62 @@ input[type=text] { font-size: 11.5px; }
   </div>
 </div>
 
+<div class="modal" id="rigModal">
+  <div class="sheet" style="width:620px">
+    <header>Rig commissioning <span class="grow"></span><button data-close>✕</button></header>
+    <div class="body">
+      <div style="font-size:10.5px;color:var(--ink-faint)">
+        The NMX reports <b>motor steps</b> and has no encoder, so nothing in software can know how far a
+        step moves the carriage — that is your belts, pulleys and microstep setting. Until it is
+        measured, a 3D export is a shape, not a camera move. Measure once per mechanical configuration,
+        and again after changing a belt, a pulley or a driver jumper.
+      </div>
+
+      <header class="subhead">Measure — jog, mark, move, read the tape</header>
+      <div id="rigAxes"></div>
+      <div class="row">
+        <span class="field"><label>Measured</label><input id="rigMeasured" class="num" type="number" step="0.1" value="500" /></span>
+        <span id="rigUnit" class="chip dim">mm</span>
+        <span class="field" style="flex:1;min-width:0"><label>Note</label>
+          <input id="rigNote" type="text" placeholder="steel rule, 2nd read" spellcheck="false" style="flex:1;min-width:0" />
+        </span>
+      </div>
+      <!-- Rotation is the hard one to measure: a protractor taped to a tripod is
+           worse than a laser on the head and a tape on the wall. Only shown for
+           pan and tilt, because it is meaningless for the slide. -->
+      <div class="row" id="rigLaserRow" style="display:none">
+        <span class="field"><label>Laser moved</label><input id="rigLaserOffset" class="num" type="number" step="1" value="1000" data-unit="mm" /></span>
+        <span class="field"><label>wall at</label><input id="rigLaserDist" class="num" type="number" step="10" value="4000" data-unit="mm" /></span>
+        <button id="rigLaserUse">= <span id="rigLaserDeg">—</span> →</button>
+        <span id="rigLaserWarn" style="font-size:10.5px;color:var(--warn);flex:1;min-width:0"></span>
+      </div>
+      <div id="rigSpansHead" class="subhead">Spans</div>
+      <div id="rigSpans"></div>
+      <div id="rigFit" style="font-size:10.5px;color:var(--ink-faint);min-height:30px"></div>
+      <div class="row">
+        <button id="rigApply" class="primary">Use these numbers</button>
+        <span class="grow"></span>
+        <span class="field"><label>Nodal</label><input id="rigNodal" class="num" type="number" step="1" data-unit="mm" title="Tilt axis to the lens entrance pupil" /></span>
+        <span class="field"><label>Head h</label><input id="rigHead" class="num" type="number" step="1" data-unit="mm" title="Pan axis above the rail" /></span>
+      </div>
+
+      <header class="subhead">Repeatability — the thing multiplicity depends on</header>
+      <div style="font-size:10.5px;color:var(--ink-faint)">
+        Park a dial indicator against the carriage at the start mark. Run a pass, return to start, and
+        type what the indicator reads. Five passes minimum.
+      </div>
+      <div class="row">
+        <span class="field"><label>Reading</label><input id="rigReading" class="num" type="number" step="0.01" value="0" data-unit="mm" /></span>
+        <button id="rigAddPass">Record pass</button>
+        <span class="grow"></span>
+        <span class="field"><label>Limit</label><input id="rigThreshold" class="num" type="number" step="0.01" min="0.01" value="0.1" data-unit="mm" /></span>
+        <button id="rigClearPasses">Clear</button>
+      </div>
+      <div id="rigPasses" style="font-size:10.5px;color:var(--ink-faint);min-height:30px"></div>
+    </div>
+  </div>
+</div>
+
 <div class="modal" id="cueModal">
   <div class="sheet" style="width:600px">
     <header>Cue outputs &amp; trigger device <span class="grow"></span><button data-close>✕</button></header>
@@ -651,6 +707,7 @@ input[type=text] { font-size: 11.5px; }
 
       <header class="subhead">Rig calibration — measured, not guessed</header>
       <div class="row">
+        <button id="exMeasure" title="Measure these on the rig instead of typing them">Measure…</button>
         <span class="field"><label>Slide</label><input id="exSlideCal" class="num" type="number" step="0.01" min="0.0001" data-unit="steps/mm" /></span>
         <span class="field"><label>Pan</label><input id="exPanCal" class="num" type="number" step="0.01" min="0.0001" data-unit="steps/°" /></span>
         <span class="field"><label>Tilt</label><input id="exTiltCal" class="num" type="number" step="0.01" min="0.0001" data-unit="steps/°" /></span>

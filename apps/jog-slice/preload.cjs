@@ -119,6 +119,14 @@ contextBridge.exposeInMainWorld("nmx", {
   lensLibraryExport: () => ipcRenderer.invoke("nmx:lens-library-export"),
   lensLibraryImport: () => ipcRenderer.invoke("nmx:lens-library-import"),
   lensUpload: (film) => ipcRenderer.invoke("nmx:lens-upload", film),
+  // commissioning (ADR-0020)
+  commissionState: () => ipcRenderer.invoke("nmx:commission-state"),
+  commissionMark: (axis) => ipcRenderer.invoke("nmx:commission-mark", axis),
+  commissionSpan: (axis, measured, note) => ipcRenderer.invoke("nmx:commission-span", axis, measured, note),
+  commissionDropSpan: (axis, index) => ipcRenderer.invoke("nmx:commission-drop-span", axis, index),
+  commissionApply: () => ipcRenderer.invoke("nmx:commission-apply"),
+  commissionPass: (readingMm) => ipcRenderer.invoke("nmx:commission-pass", readingMm),
+  commissionSet: (patch) => ipcRenderer.invoke("nmx:commission-set", patch),
   // e-stop
   stopAll: () => ipcRenderer.invoke("nmx:stop-all"),
 });

@@ -23,6 +23,7 @@ import {
   buildLensProgram, lensProgramSize, lensFeasibility, LENS_AXIS_INDEX,
   serializeLensLibrary, parseLensLibrary, mergeLensLibrary,
   validateLensLibraryEntry, lensLibraryId,
+  fitCalibration, diagnoseCalibration, repeatability,
   NO_LIMITS, isTaught, jogWouldExceed, violationsForFilm, describeViolations,
 } from "@graffik-ng/nmx-protocol";
 
@@ -34,6 +35,12 @@ const SUPPORTED_FIRMWARE = 70;   // ADR-0004: refuse programmed moves on other v
 const MAX_JOG_SPEED = 4000;      // hard clamp, independent of soft limits
 
 /* ---------------- preferences ---------------- */
+
+/** Motor index by calibration axis. Slide is motor 1 (KF axis 0). */
+const CAL_AXES = ["slide", "pan", "tilt"];
+const CAL_MOTOR = { slide: 1, pan: 2, tilt: 3 };
+const CAL_UNIT = { slide: "mm", pan: "deg", tilt: "deg" };
+const CAL_PREF_KEY = { slide: "slideStepsPerMm", pan: "panStepsPerDeg", tilt: "tiltStepsPerDeg" };
 
 const DEFAULT_PREFS = {
   window: { width: 1180, height: 820 },
@@ -59,6 +66,15 @@ const DEFAULT_PREFS = {
   /* Marks belong to a LENS, not to a move (ADR-0019). Kept here so marking a
      piece of glass is done once, not once per setup. */
   lensLibrary: [],
+  /* Commissioning (ADR-0020): the measurements themselves, not just the
+     conclusion. Keeping the spans means a suspect number can be argued with
+     later — "which measurement gave us 160?" is answerable. */
+  commission: {
+    spans: { slide: [], pan: [], tilt: [] },
+    marked: { slide: null, pan: null, tilt: null },
+    passes: [],
+    thresholdMm: 0.1,
+  },
   lens: {
     motors: {
       focus: { steps: 0, maxStepsPerSec: 3000, invert: false },
@@ -125,6 +141,16 @@ function loadPrefs() {
       lensLibrary: Array.isArray(raw.lensLibrary) ? raw.lensLibrary.filter((e) => {
         try { validateLensLibraryEntry(e); return true; } catch { return false; }
       }) : [],
+      commission: {
+        ...DEFAULT_PREFS.commission, ...(raw.commission ?? {}),
+        spans: Object.fromEntries(CAL_AXES.map((k) => [
+          k, Array.isArray(raw.commission?.spans?.[k])
+            ? raw.commission.spans[k].filter((o) => Number.isFinite(o?.steps) && Number.isFinite(o?.measured))
+            : [],
+        ])),
+        marked: { ...DEFAULT_PREFS.commission.marked, ...(raw.commission?.marked ?? {}) },
+        passes: Array.isArray(raw.commission?.passes) ? raw.commission.passes.filter(Number.isFinite) : [],
+      },
       lens: {
         ...DEFAULT_PREFS.lens, ...(raw.lens ?? {}),
         motors: Object.fromEntries(LENS_KINDS.map((k) => [
@@ -298,10 +324,13 @@ ipcMain.handle("nmx:jog", async (e, motor, stepsPerSec) => {
   return { blocked: false };
 });
 
-ipcMain.handle("nmx:position", async (_e, motor) => {
+/** The one place a motor position is read, so commissioning and the readout
+    cannot drift into asking different questions. */
+async function readPosition(motor) {
   const r = await requireClient().query(motors.queryPosition(motor));
   return r.value;
-});
+}
+ipcMain.handle("nmx:position", (_e, motor) => readPosition(motor));
 
 /* ---------------- IPC: classic engine ---------------- */
 
@@ -666,6 +695,118 @@ async function declareLensMotors(be, kinds = LENS_KINDS) {
     await be.declareLensAxis({ kind, steps: m.steps, maxStepsPerSec: m.maxStepsPerSec, invert: m.invert });
   }
 }
+
+/* ------------------------------------------------------------------
+   Commissioning (ADR-0020) — measuring the rig instead of guessing it
+   ------------------------------------------------------------------ */
+
+function commissionFits() {
+  const out = {};
+  for (const axis of CAL_AXES) {
+    const fit = fitCalibration(prefs.commission.spans[axis], CAL_UNIT[axis]);
+    const stored = prefs.export.calibration[CAL_PREF_KEY[axis]];
+    out[axis] = {
+      ...fit,
+      unit: CAL_UNIT[axis],
+      stored,
+      /* Compared against what the export is USING, not against a textbook
+         value. "You measured 320 and the file says 160" is actionable; "that
+         is unusual for a slider" is not. */
+      diagnosis: fit.n && stored ? diagnoseCalibration(fit.perUnit, stored) : null,
+    };
+  }
+  return out;
+}
+
+ipcMain.handle("nmx:commission-state", () => ({
+  spans: structuredClone(prefs.commission.spans),
+  marked: structuredClone(prefs.commission.marked),
+  passes: [...prefs.commission.passes],
+  thresholdMm: prefs.commission.thresholdMm,
+  fits: commissionFits(),
+  repeatability: repeatability(prefs.commission.passes, prefs.commission.thresholdMm),
+  calibration: structuredClone(prefs.export.calibration),
+}));
+
+/** Remember where an axis is now, so the next reading can be a span from here. */
+ipcMain.handle("nmx:commission-mark", async (_e, axis) => {
+  if (!CAL_AXES.includes(axis)) throw new Error(`unknown axis "${axis}"`);
+  const pos = await readPosition(CAL_MOTOR[axis]);
+  prefs.commission.marked[axis] = pos;
+  savePrefs();
+  return pos;
+});
+
+/**
+ * Close a span: read the position now, subtract the mark, and pair the step
+ * count with whatever the tape said.
+ */
+ipcMain.handle("nmx:commission-span", async (_e, axis, measured, note) => {
+  if (!CAL_AXES.includes(axis)) throw new Error(`unknown axis "${axis}"`);
+  const from = prefs.commission.marked[axis];
+  if (from === null || from === undefined) throw new Error("mark the start first — there is nothing to measure from");
+  const m = Number(measured);
+  if (!Number.isFinite(m) || m === 0) throw new Error(`"${measured}" is not a distance`);
+  const pos = await readPosition(CAL_MOTOR[axis]);
+  const steps = pos - from;
+  if (steps === 0) throw new Error("the axis has not moved since the mark");
+  prefs.commission.spans[axis].push({ steps, measured: m, ...(note ? { note } : {}) });
+  prefs.commission.marked[axis] = null;
+  savePrefs();
+  return commissionFits()[axis];
+});
+
+ipcMain.handle("nmx:commission-drop-span", (_e, axis, index) => {
+  if (!CAL_AXES.includes(axis)) throw new Error(`unknown axis "${axis}"`);
+  prefs.commission.spans[axis].splice(index, 1);
+  savePrefs();
+  return commissionFits()[axis];
+});
+
+/**
+ * Write the measured numbers into the calibration the export actually uses.
+ *
+ * Only axes that HAVE a measurement are touched — applying a zero over a good
+ * stored value because one axis has not been measured yet would be the app
+ * losing work on the operator's behalf.
+ */
+ipcMain.handle("nmx:commission-apply", () => {
+  const fits = commissionFits();
+  const applied = [];
+  for (const axis of CAL_AXES) {
+    if (!fits[axis].n || !(fits[axis].perUnit > 0)) continue;
+    prefs.export.calibration[CAL_PREF_KEY[axis]] = Number(fits[axis].perUnit.toFixed(4));
+    applied.push(`${axis} ${fits[axis].perUnit.toFixed(2)} ${fits[axis].unit === "mm" ? "steps/mm" : "steps/°"}`);
+  }
+  savePrefs();
+  return { applied, calibration: structuredClone(prefs.export.calibration), skipped: CAL_AXES.filter((a) => !fits[a].n) };
+});
+
+/** A dial-indicator reading after a pass. `null` clears the set. */
+ipcMain.handle("nmx:commission-pass", (_e, readingMm) => {
+  if (readingMm === null) prefs.commission.passes = [];
+  else {
+    const v = Number(readingMm);
+    if (!Number.isFinite(v)) throw new Error(`"${readingMm}" is not a reading`);
+    prefs.commission.passes.push(v);
+  }
+  savePrefs();
+  return { passes: [...prefs.commission.passes], result: repeatability(prefs.commission.passes, prefs.commission.thresholdMm) };
+});
+
+ipcMain.handle("nmx:commission-set", (_e, patch) => {
+  if (patch.thresholdMm !== undefined) {
+    const v = Number(patch.thresholdMm);
+    if (Number.isFinite(v) && v > 0) prefs.commission.thresholdMm = v;
+  }
+  for (const k of ["nodalOffsetMm", "headHeightMm"]) {
+    if (patch[k] !== undefined && Number.isFinite(Number(patch[k]))) {
+      prefs.export.calibration[k] = Number(patch[k]);
+    }
+  }
+  savePrefs();
+  return { thresholdMm: prefs.commission.thresholdMm, calibration: structuredClone(prefs.export.calibration) };
+});
 
 /* ---- the lens library (ADR-0019) ---- */
 

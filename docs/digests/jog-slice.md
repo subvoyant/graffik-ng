@@ -1,6 +1,6 @@
 # Digest: apps/jog-slice (Electron app)
 
-**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.12) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
+**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.13) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
 
 ## Shape
 
@@ -131,6 +131,15 @@ Layout is a fixed frame — appbar / rail(244px) / stage / statusbar — with **
 - **`nmx:cues-arm` uploads the lens program BEFORE `ARM`.** `ARM` is what latches it and its reply carries the count the backend cross-checks; uploading after would arm an empty curve.
 - **`nmx:cue-check` returns `lensProblems` too, and `armCuesForPass` is one gate for both.** Two gates would be two chances to skip one, and both failures cost the same thing — a take.
 - ⌾ Lens… modal layout follows the *workflow*: marks table → add-mark row → **Jog** (drives the barrel and fills the "At" field, so marking is drive-read-type) → MOTOR subhead → device chip + Calibrate + travel → top speed + handedness. The jog was originally down in the motor block, which broke the marking loop and wrapped the Calibrate button onto its own line. `#lensMarkRows` is capped at 190 px and scrolls — a real lens map runs to a dozen marks and the sheet must not outgrow the window.
+## Rig commissioning (v0.13 — ADR-0020)
+
+- Reached from **Export 3D… → Measure…**, because that is where an operator is standing when they realise they do not know their steps/mm.
+- **The panel carries its own jog buttons AND its own live position readout.** The procedure is jog-to-a-mark, walk away with a tape, come back and type — a dialog covering the rail's jog controls would make the thing it exists for impossible, and jogging blind to the step count is the same failure one layer down. The existing position poll writes `#rigPos{motor}` when present; the rows are rebuilt on every render, so it looks the node up each tick rather than caching it.
+- State in `prefs.commission` = `{spans:{slide,pan,tilt}, marked, passes, thresholdMm}` — **the measurements, not just the conclusion**, so "which measurement gave us 160?" stays answerable.
+- IPC: `nmx:commission-state` · `-mark` · `-span` · `-drop-span` · `-apply` · `-pass` · `-set`. `readPosition()` is factored out of `nmx:position` so commissioning and the readout cannot drift into asking different questions.
+- **`-apply` only touches axes that were measured** and returns the new calibration, which the renderer merges into `exPrefs` via `adoptCalibration()`. Without that merge the export dialog's next keystroke would write its stale copy back over the numbers just measured — invisible until an export came out at the old scale.
+- The laser row shows only for pan/tilt; `Measured` defaults flip 500 mm ↔ 90° on axis change, because "500 degrees" is a nonsense default and nonsense defaults eventually get recorded.
+
 ## Lens library (v0.12 — ADR-0019)
 
 - Held in **`prefs.lensLibrary`**, guarded on load by running each entry through `validateLensLibraryEntry` and dropping the failures — `prefs.recent` (v0.7.0) is why every sub-object gets a guard.

@@ -24,3 +24,4 @@ Immutable decision records. Accepted = in force. Supersede, never edit. See ADR-
 | [0017](0017-lens-axes-focus-iris-zoom.md) | Lens axes: normalised travel + witness marks, driven device-side | Accepted (§5 motor `invert` superseded by 0018) |
 | [0018](0018-lens-device-protocol-v2.md) | GRAFFIK-TRIG v2: decimated lens curves, mandatory calibration, schema v4 | Accepted (unverified against a motor) |
 | [0019](0019-lens-library.md) | Lens library: marks belong to a lens, merged by id, never replaced | Accepted |
+| [0020](0020-commissioning-measured-not-guessed.md) | Commissioning: the app measures the rig — spans, spread, and named suspects | Accepted |

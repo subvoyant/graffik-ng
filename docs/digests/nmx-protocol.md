@@ -1,6 +1,6 @@
 # Digest: @graffik-ng/nmx-protocol
 
-**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.12) · 264 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
+**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.13) · 290 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
 
 ## packet.ts — codec
 
@@ -91,6 +91,16 @@ Namespaces returning `Packet`: `general` (sub 0), `motors` (1–3, `Motor = 1|2|
 - `mergeLensLibrary(existing, incoming)` → `{merged, added, updated, rejected}`. **A malformed entry does NOT sink the import** — the survivors go in and the casualties are named. Deliberately the opposite of a move file: a move is one indivisible thing, a library is a collection. `merged` is always sorted by kind then name so a picker is readable.
 - `validateLensLibraryEntry` delegates to `validateLensMap` — an entry that would be rejected as a map cannot be used, and finding that out at apply time is too late.
 - `lensEntryToMap` / `lensMapToEntry` **copy** their marks; mutating one must not reach the other.
+
+## commission.ts — measuring the rig (ADR-0020)
+
+- The unit is a **span**: `CalObservation {steps, measured, note?}` — how far the axis moved in steps, and what a rule or an inclinometer said that was. `fitCalibration(obs, "mm"|"deg")` averages each span's own ratio.
+- **Deliberately not a least-squares line through absolute positions.** A line has an intercept, the intercept absorbs backlash and measurement offset, and a fit that absorbs your errors has stopped telling you about them. **The spread between spans IS the error estimate.**
+- `spreadPct` is **peak-to-peak**, not deviation-from-the-mean: with two measurements the latter is exactly half the disagreement the operator can see between their own two numbers, and a warning that prints half of what it claims teaches people to distrust it.
+- **`worst` is null below three observations.** Two disagreeing spans sit the same distance from their own mean; nothing here can say which is wrong, and naming one would be believed. The warning asks for a third instead.
+- `diagnoseCalibration(measured, reference)` names ADR-0015's two traps against the **stored** value: ~×100 is a unit slip, a clean power of two is the driver's microstep jumper. Both look reasonable alone and are an order of magnitude out in the export.
+- `degreesFromLaser` / `laserAngleWarning` — the field method for rotation (laser on the head, marks on a wall, `atan(offset/distance)`). Assumes the first mark is square to the wall; warns above 25° where that stops being free, and below 5° where the angle is too small to read.
+- `repeatability(readingsMm, thresholdMm)` reports **bias and scatter separately** — a consistent offset is backlash and largely correctable, scatter is lost steps and is not. Refuses to be believed below five passes.
 
 ## limits.ts — soft travel limits (ADR-0013)
 
