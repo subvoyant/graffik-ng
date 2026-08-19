@@ -30,3 +30,4 @@ Immutable decision records. Accepted = in force. Supersede, never edit. See ADR-
 | [0023](0023-first-motion-creep-and-the-bringup-report.md) | Creep on an untaught axis; a bring-up report that states what is still unknown | Accepted |
 | [0024](0024-dead-export-audit.md) | Dead-export audit: "tested" is not "reachable" | Accepted |
 | [0025](0025-playhead-follows-the-pass.md) | Playhead follows a running pass, anchored to the firmware's clock | Accepted |
+| [0026](0026-partial-execution-refuse-or-say-so.md) | Partial execution: a headless runner refuses, a supervised UI says so and proceeds | Accepted |

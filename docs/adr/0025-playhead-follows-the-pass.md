@@ -1,6 +1,6 @@
 # ADR-0025: The playhead follows a running pass — from the firmware's clock, not the host's
 
-**Status:** Accepted (v0.18)
+**Status:** Accepted (v0.18) · amended same day, see **Amendment (v0.19)**
 **Date:** 2026-08-19
 **Deciders:** Project owner (observed it) + Claude
 
@@ -96,3 +96,53 @@ Marking it was strictly better than hiding it.
 
 **Interpolate with no cap.** Smoothest, and a stalled or disconnected controller
 would show a playhead confidently completing a pass that never happened.
+
+
+---
+
+## Amendment (v0.19, 2026-08-19) — it was jerky, and the reasons were not the ones I would have guessed
+
+Owner, watching it run: *"The movement of the playhead is very jerky, can it be
+smooth?"* Three independent causes, none of them the drawing:
+
+1. **`setInterval` at 40 ms.** Not display-synced, so ticks landed early or late
+   against the compositor. Now `requestAnimationFrame`.
+2. **`Math.round` on the frame number.** The playhead could only occupy whole
+   frames, so on a zoomed-in timeline it hopped between them instead of moving.
+   The drawn position is a float; only the readout rounds, and `endPassSweep`
+   puts it back on the grid because the rest of the editor assumes it is there.
+3. **The re-anchor was a snap.** Every 500 ms poll assigned the controller's
+   percent straight to the drawn position, so any disagreement with the
+   extrapolation became a visible jump twice a second — the loudest of the
+   three, and the one that came from the design rather than an oversight.
+
+Also: `syncInputs()` was being called on every tick, rewriting every field in
+the rail to update two labels.
+
+### Converge by adjusting SPEED, never by assigning position
+
+The reading now moves a *target*; the drawn position approaches it at a bounded,
+non-negative rate. `shownPct` is monotonic by construction, so the playhead
+**cannot step backwards** — and that is not hypothetical. The first version of
+this fix clamped with `Math.min(predicted, …)`, which yanked the playhead
+backwards the instant a reading came in behind the extrapolation. Measurement
+caught it; reading the code had not.
+
+Ahead of the prediction, speed falls to zero and the playhead waits. Behind it,
+speed rises (capped at 3×). **A brief pause reads as steady; a reversal reads as
+broken.**
+
+### Measured rather than asserted
+
+A headless harness runs a 30 s six-lane move, samples the drawn position every
+frame, and feeds it deliberately disagreeing controller readings:
+
+| | before | after |
+|---|---|---|
+| backwards steps | 2 | **0** |
+| ticks in 2.2 s | — | 132 (60 fps) |
+| `render()` cost | — | 0.74 ms |
+| velocity spikes > 3× median | 0 | 0 |
+
+`render()` at 0.74 ms means 60 fps was never in question — which is worth
+knowing, because "redraw less often" would have been the obvious wrong fix.

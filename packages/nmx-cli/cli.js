@@ -4,7 +4,7 @@
  *
  *   nmx ports                          list serial ports
  *   nmx info  --port <path> | --sim    firmware version + handshake
- *   nmx run <file.graffik> --port <path> [--sim] [--passes N] [--cue S]
+ *   nmx run <file.graffik> --port <path> [--sim] [--passes N] [--cue S] [--motion-only]
  *   nmx stop  --port <path>            broadcast e-stop (program + KF)
  *
  * Same core, same solver, same command sequences as the app (ADR-0009/0010).
@@ -74,6 +74,27 @@ async function main() {
       const file = args[1] ?? die("usage: nmx run <file.graffik> --port <path>");
       const passes = Number(flag("passes") ?? 1);
       const film = deserializeFilm(await fs.readFile(file, "utf-8"));
+
+      /* This runner drives the NMX and nothing else. A move file can carry two
+       * subsystems it has no link to — timeline cues (ADR-0016) and lens axes
+       * (ADR-0018), both of which live on a GRAFFIK-TRIG board the CLI does not
+       * open. Running anyway would report "pass complete" over a pass where the
+       * focus never pulled. Say so, and make the operator say it back. */
+      const ignored = [];
+      if (film.events?.length) ignored.push(`${film.events.length} timeline cue(s) — no trigger backend here (ADR-0016)`);
+      if (film.lensAxes?.length) ignored.push(`${film.lensAxes.length} lens axis/axes — no GRAFFIK-TRIG link here (ADR-0018)`);
+      if (ignored.length) {
+        for (const line of ignored) console.error(`nmx: WILL NOT RUN: ${line}`);
+        if (!has("motion-only")) {
+          die("this file needs the app, or pass --motion-only to run the motion axes alone");
+        }
+        console.error("nmx: --motion-only given; running the motion axes alone");
+      }
+      /* Soft limits are enforced in the app's main process against limits stored
+       * in ITS preferences (ADR-0013). The CLI has no access to them, so it is not
+       * a quieter app — it is an unguarded one. Never let that be a surprise. */
+      console.error("nmx: soft travel limits are NOT enforced by the CLI — check the rig's clearance yourself (ADR-0013)");
+
       const cueS = Number(flag("cue") ?? Math.round(filmCueMs(film) / 1000));
       const { client, close } = await openClient();
       const cleanup = async () => { try { await client.stopAll(); await close(); } catch { /* gone */ } };

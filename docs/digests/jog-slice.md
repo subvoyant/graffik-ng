@@ -1,6 +1,6 @@
 # Digest: apps/jog-slice (Electron app)
 
-**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.18) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
+**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.19) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
 
 ## Shape
 
@@ -133,12 +133,19 @@ Layout is a fixed frame — appbar / rail(244px) / stage / statusbar — with **
 - **`nmx:cues-arm` uploads the lens program BEFORE `ARM`.** `ARM` is what latches it and its reply carries the count the backend cross-checks; uploading after would arm an empty curve.
 - **`nmx:cue-check` returns `lensProblems` too, and `armCuesForPass` is one gate for both.** Two gates would be two chances to skip one, and both failures cost the same thing — a take.
 - ⌾ Lens… modal layout follows the *workflow*: marks table → add-mark row → **Jog** (drives the barrel and fills the "At" field, so marking is drive-read-type) → MOTOR subhead → device chip + Calibrate + travel → top speed + handedness. The jog was originally down in the motor block, which broke the marking loop and wrapped the Calibrate button onto its own line. `#lensMarkRows` is capped at 190 px and scrolls — a real lens map runs to a dozen marks and the sheet must not outgrow the window.
-## The playhead during a pass (v0.18 — ADR-0025)
+## The playhead during a pass (v0.18, smoothed in v0.19 — ADR-0025 + its amendment)
 
-- `startPassSweep(engine, durationFrames)` / `anchorPassSweep(percent)` / `endPassSweep()`. **The controller's percent is the truth**; the 40 ms local tick only smooths between the 500 ms polls and is **capped at one poll interval ahead**, so a stalled controller shows a stalled playhead rather than one that has run ahead of the rig. Never invert that — ADR-0005.
+- `startPassSweep(engine, durationFrames)` / `anchorPassSweep(percent)` / `endPassSweep()`. **The controller's percent is the truth**; the local tick (a `requestAnimationFrame` loop since v0.19) only smooths between the 500 ms polls, and the extrapolation it draws from is **capped at one poll interval ahead** (`elapsed` clamped to `SWEEP_POLL_MS`), so a stalled controller shows a stalled playhead rather than one that has run ahead of the rig. Never invert that — ADR-0005.
 - **A classic pass is not the timeline.** The lanes show the KF move; a 2-point pass is a different move with its own duration. It sweeps (elapsed time is true either way) but in warning amber with the tag `2-POINT PASS · these lanes are not running`, because a normal playhead over those curves would assert a position that is false.
+
+  ![The amber classic-pass playhead sweeping the key-frame lanes, tagged 2-POINT PASS — these lanes are not running](../images/pass-playhead-classic.png)
+
 - **A running playhead is brighter ink, never a series hue.** The first attempt used `--accent`, which is the *same blue as the Slide trace* — the playhead disappeared into its own curve. ADR-0012 already answers it: chrome wears ink.
 - Every stop path (`STOP ALL`, the physical e-stop, KF stop) calls `endPassSweep()`. A playhead still moving after a stop asserts motion that has been halted.
+- **Smoothness (v0.19).** `requestAnimationFrame`, not `setInterval`; the drawn frame is a **float** (only the readout rounds, and `endPassSweep` restores the grid); and the reading moves a **target** that the drawn position converges on **by adjusting speed, never by assigning position** — so `shownPct` is monotonic and the playhead cannot step backwards. A `Math.min(predicted, …)` clamp did allow exactly that and was caught by measuring, not by reading. Ahead → speed 0 and it waits; behind → speed rises, capped at 3×.
+- Do **not** call `syncInputs()` from the sweep tick — it rewrites every rail field to update two labels.
+- **How to re-verify** (needs Playwright, which the repo does not depend on — this runs outside it): load `index.html` headless, `startPassSweep(...)`, sample `playheadFrame` on every `requestAnimationFrame`, and drive `anchorPassSweep()` every 500 ms with values that **deliberately disagree** with the extrapolation by ±1%. Then check the per-frame velocity for *backwards steps* and *spikes over 3× median*. Disagreeing readings are the case that snaps; agreeing ones prove nothing.
+- Measured: 60 fps, `render()` ≈ 0.74 ms on a six-lane 30 s move, 0 backwards steps, 0 velocity spikes over 3× median. Redrawing less often would have been the obvious wrong fix.
 - `followPlayhead()` pans the view when the sweep leaves the visible range.
 
 ## Bring-up report + creep (v0.16 — ADR-0023)
@@ -222,4 +229,4 @@ Settings live in `prefs.export` — **calibration is a property of the rig, not 
 
 ## Known gaps (intentional)
 
-Per-axis classic arm params; KF `updateRateMs` not exposed; no per-keyframe easing/tangent handles (the solver picks velocities — ADR-0009); no panel resizing/docking; no light theme; **no lens motor driver** (lanes author + export only — ADR-0017 §4); no per-lens map library (maps live in the move file); a 7th lane would need scrolling tracks — six is the height budget; gamepad **button** bindings (only axes are mappable — no e-stop-on-button yet); limits are per-axis boxes, not a swept-volume/collision model. (Simulator animates progress +20%/poll so demo passes complete — see nmx-protocol digest.)
+Per-axis classic arm params; KF `updateRateMs` not exposed; no per-keyframe easing/tangent handles (the solver picks velocities — ADR-0009); no panel resizing/docking; no light theme; a 7th lane would need scrolling tracks — six is the height budget; limits are per-axis boxes, not a swept-volume/collision model; **no lens motor has ever turned** — protocol v2 ships and is parity-checked against the reference firmware (ADR-0018), but HARDWARE-BRINGUP Phase 7 is unrun. *(This paragraph was stale until v0.19: it still claimed there was no lens motor driver, no lens library and no gamepad button bindings, all three of which shipped in v0.11/v0.12/v0.14.)* (Simulator animates progress +20%/poll so demo passes complete — see nmx-protocol digest.)

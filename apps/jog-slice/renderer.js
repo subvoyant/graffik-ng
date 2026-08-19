@@ -2439,35 +2439,91 @@ $("exGo").onclick = async () => {
       drawn in warning colour and labelled.
    ------------------------------------------------------------------ */
 
-let passSweep = null;   // {engine, durationFrames, pct, atMs, msPerPct}
-let sweepTimer = null;
+let passSweep = null;
+let sweepRaf = null;
 
+const SWEEP_POLL_MS = 500;   // how often the controller is actually asked
+/* Gain on the catch-up term: an error closes in roughly 300 ms. High enough
+   that a correction is not a slow drift, low enough that it is not a jump. */
+const SWEEP_GAIN = 1 / 300;
+
+/**
+ * Start following a pass.
+ *
+ * The first version of this was jerky for three separate reasons, and all
+ * three had to go:
+ *
+ *  1. **`setInterval` at 40 ms.** Not display-synced, so frames landed early
+ *     or late against the compositor and the motion stuttered. Now
+ *     `requestAnimationFrame`.
+ *  2. **`Math.round` on the frame.** The playhead could only sit on whole
+ *     frames, so on a zoomed-in timeline it hopped between them instead of
+ *     moving. The drawn position is a float now; only the readout rounds.
+ *  3. **The 500 ms re-anchor was a SNAP.** Every poll assigned the
+ *     controller's percent directly, so any disagreement with the
+ *     extrapolation became a visible jump twice a second. Now the reading
+ *     moves a *target* and the drawn position converges on it at a bounded
+ *     rate — continuous by construction.
+ *
+ * Also: `syncInputs()` was being called every tick, rewriting every field in
+ * the rail sixty times a second to update two labels.
+ */
 function startPassSweep(engine, durationFrames) {
   const ms = TC.framesToMsExact(Math.max(1, durationFrames), film.timebase);
-  passSweep = { engine, durationFrames, pct: 0, atMs: performance.now(), msPerPct: ms / 100 };
-  clearInterval(sweepTimer);
-  sweepTimer = setInterval(() => {
+  passSweep = {
+    engine, durationFrames,
+    ratePctPerMs: 100 / ms,
+    targetPct: 0,                       // last reading FROM THE CONTROLLER
+    targetAt: performance.now(),
+    shownPct: 0,                        // what is actually drawn
+    lastTick: performance.now(),
+  };
+  cancelAnimationFrame(sweepRaf);
+  const tick = () => {
     if (!passSweep) return;
-    const since = performance.now() - passSweep.atMs;
-    /* Never more than one poll interval ahead of the last real reading. */
-    const ahead = Math.min(since / passSweep.msPerPct, 500 / passSweep.msPerPct);
-    const pct = Math.max(0, Math.min(100, passSweep.pct + ahead));
-    playheadFrame = Math.round((pct / 100) * passSweep.durationFrames);
+    const now = performance.now();
+    const dt = Math.min(now - passSweep.lastTick, 100);   // a backgrounded tab must not leap
+    passSweep.lastTick = now;
+
+    /* Where the controller probably is — extrapolated at most ONE poll past
+       its last word, so a controller that stops reporting produces a playhead
+       that stops moving rather than one that confidently finishes (ADR-0025). */
+    const elapsed = Math.min(now - passSweep.targetAt, SWEEP_POLL_MS);
+    const predicted = Math.max(0, Math.min(100, passSweep.targetPct + elapsed * passSweep.ratePctPerMs));
+
+    /* Converge by adjusting SPEED, never by assigning position.
+       `shownPct` is monotonic by construction, so the playhead can never step
+       backwards — which a `Math.min(predicted, …)` clamp did allow the moment a
+       reading came in behind the extrapolation, and which measurement caught.
+       Ahead of the prediction the speed falls to zero and the playhead waits;
+       behind it, it speeds up. A brief pause reads as "steady"; a reversal
+       reads as broken. */
+    const lead = passSweep.shownPct - predicted;
+    const v = Math.max(0, Math.min(passSweep.ratePctPerMs * 3,
+                                   passSweep.ratePctPerMs - lead * SWEEP_GAIN));
+    passSweep.shownPct = Math.min(100, passSweep.shownPct + v * dt);
+
+    playheadFrame = (passSweep.shownPct / 100) * passSweep.durationFrames;
     followPlayhead();
     render();
-    syncInputs();
-  }, 40);
+    sweepRaf = requestAnimationFrame(tick);
+  };
+  sweepRaf = requestAnimationFrame(tick);
 }
 
-/** Re-anchor on a real reading from the controller. */
+/** Re-anchor on a real reading. Moves the TARGET, never the drawn position. */
 function anchorPassSweep(percent) {
   if (!passSweep || !Number.isFinite(percent)) return;
-  passSweep.pct = percent;
-  passSweep.atMs = performance.now();
+  passSweep.targetPct = percent;
+  passSweep.targetAt = performance.now();
 }
 
 function endPassSweep() {
-  clearInterval(sweepTimer); sweepTimer = null; passSweep = null;
+  cancelAnimationFrame(sweepRaf); sweepRaf = null; passSweep = null;
+  /* Back onto the frame grid — everything else in the editor assumes the
+     playhead sits on a whole frame. */
+  playheadFrame = Math.round(playheadFrame);
+  syncInputs();
   render();
 }
 

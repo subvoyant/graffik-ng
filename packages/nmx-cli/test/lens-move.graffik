@@ -1,0 +1,72 @@
+{
+  "format": "graffik-ng-move",
+  "version": 4,
+  "name": "CLI refusal fixture",
+  "timebase": {
+    "num": 24,
+    "den": 1,
+    "dropFrame": false
+  },
+  "durationFrames": 240,
+  "cueFrames": 120,
+  "startFrame": 0,
+  "engine": "keyframe",
+  "axes": [
+    {
+      "axis": 0,
+      "points": [
+        {
+          "frame": 0,
+          "position": 0
+        },
+        {
+          "frame": 240,
+          "position": 0
+        }
+      ]
+    },
+    {
+      "axis": 1,
+      "points": [
+        {
+          "frame": 0,
+          "position": 0
+        },
+        {
+          "frame": 240,
+          "position": 0
+        }
+      ]
+    },
+    {
+      "axis": 2,
+      "points": [
+        {
+          "frame": 0,
+          "position": 0
+        },
+        {
+          "frame": 240,
+          "position": 0
+        }
+      ]
+    }
+  ],
+  "lensAxes": [
+    {
+      "kind": "focus",
+      "target": "focus",
+      "keys": [
+        {
+          "frame": 0,
+          "position": 0.5
+        },
+        {
+          "frame": 240,
+          "position": 0.5
+        }
+      ]
+    }
+  ],
+  "notes": "Fixture for scripts/check.sh: `nmx run` must REFUSE this file without --motion-only — the CLI has no GRAFFIK-TRIG link, so the focus pull would silently not happen (ADR-0018)."
+}

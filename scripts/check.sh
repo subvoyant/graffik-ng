@@ -27,6 +27,18 @@ npm test --prefix packages/nmx-protocol
 step "CLI smoke test against the simulator"
 node packages/nmx-cli/cli.js info --sim
 
+# The CLI drives the NMX only. A move carrying cues or lens axes must be refused,
+# not quietly run as a motion-only pass that reports "complete" (ADR-0016/0018).
+if node packages/nmx-cli/cli.js run packages/nmx-cli/test/lens-move.graffik --sim >/dev/null 2>&1; then
+    echo "FAIL: nmx run accepted a lens-bearing move without --motion-only" >&2
+    exit 1
+fi
+echo "lens-bearing move refused without --motion-only"
+
+# ...and the whole run path still works end to end against the simulator.
+node packages/nmx-cli/cli.js run packages/nmx-cli/test/lens-move.graffik --sim --motion-only --cue 0 \
+    | tail -1
+
 step "reference firmware exercise"
 CXX=${CXX:-g++}
 "$CXX" -std=c++17 -Wall -I firmware/graffik-trig/test \
