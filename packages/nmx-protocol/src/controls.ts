@@ -54,10 +54,6 @@ export const CONTROL_ACTIONS: readonly ControlAction[] = [
     note: "on press; edits the move, not the rig",
   },
 ];
-
-export const controlAction = (id: string): ControlAction | undefined =>
-  CONTROL_ACTIONS.find((a) => a.id === id);
-
 /**
  * Guards a hold-to-fire control against a knock.
  *

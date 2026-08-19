@@ -1,10 +1,12 @@
 # Digest: apps/jog-slice (Electron app)
 
-**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.16) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
+**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.18) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
 
 ## Shape
 
 Four files, no bundler: `main.js` (ESM main process — all hardware + film I/O + pure math endpoints), `preload.cjs` (contextBridge → `window.nmx` **and `window.tc`**), `index.html` (markup/styles), `renderer.js` (all UI logic, vanilla). `contextIsolation: true`, `nodeIntegration: false` (ADR-0007).
+
+**`window.lens` and `window.controls` are bridged for the same reason as `window.tc`** (ADR-0024, ADR-0021): the renderer had grown its own copy of the lens formatter, axis constructor and library conversions because nothing exposed the originals. Never reimplement a core pure function in the renderer — bridge it.
 
 **`window.tc` — the timecode bridge (v0.7, ADR-0014).** preload `require()`s the core package and re-exposes the timecode functions as pure SYNC calls. The renderer redraws on every pointer move, so per-label IPC is absurd; a second copy of the arithmetic in the renderer is worse, because drop-frame drifts quietly. Consequence: the app now hard-depends on the core being **built** (`dist/`), and preload throws a named error if it is not — a loud startup failure instead of a subtle wrong answer. `require()` of an ESM package needs Node ≥22.12, which every supported Electron ships.
 
@@ -131,6 +133,14 @@ Layout is a fixed frame — appbar / rail(244px) / stage / statusbar — with **
 - **`nmx:cues-arm` uploads the lens program BEFORE `ARM`.** `ARM` is what latches it and its reply carries the count the backend cross-checks; uploading after would arm an empty curve.
 - **`nmx:cue-check` returns `lensProblems` too, and `armCuesForPass` is one gate for both.** Two gates would be two chances to skip one, and both failures cost the same thing — a take.
 - ⌾ Lens… modal layout follows the *workflow*: marks table → add-mark row → **Jog** (drives the barrel and fills the "At" field, so marking is drive-read-type) → MOTOR subhead → device chip + Calibrate + travel → top speed + handedness. The jog was originally down in the motor block, which broke the marking loop and wrapped the Calibrate button onto its own line. `#lensMarkRows` is capped at 190 px and scrolls — a real lens map runs to a dozen marks and the sheet must not outgrow the window.
+## The playhead during a pass (v0.18 — ADR-0025)
+
+- `startPassSweep(engine, durationFrames)` / `anchorPassSweep(percent)` / `endPassSweep()`. **The controller's percent is the truth**; the 40 ms local tick only smooths between the 500 ms polls and is **capped at one poll interval ahead**, so a stalled controller shows a stalled playhead rather than one that has run ahead of the rig. Never invert that — ADR-0005.
+- **A classic pass is not the timeline.** The lanes show the KF move; a 2-point pass is a different move with its own duration. It sweeps (elapsed time is true either way) but in warning amber with the tag `2-POINT PASS · these lanes are not running`, because a normal playhead over those curves would assert a position that is false.
+- **A running playhead is brighter ink, never a series hue.** The first attempt used `--accent`, which is the *same blue as the Slide trace* — the playhead disappeared into its own curve. ADR-0012 already answers it: chrome wears ink.
+- Every stop path (`STOP ALL`, the physical e-stop, KF stop) calls `endPassSweep()`. A playhead still moving after a stop asserts motion that has been halted.
+- `followPlayhead()` pans the view when the sweep leaves the visible range.
+
 ## Bring-up report + creep (v0.16 — ADR-0023)
 
 - `nmx:jog` applies `capUntaughtJog` **before** the limit check — main-side, same reasoning as ADR-0013.

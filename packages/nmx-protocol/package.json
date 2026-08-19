@@ -1,6 +1,6 @@
 {
   "name": "@graffik-ng/nmx-protocol",
-  "version": "0.16.0",
+  "version": "0.18.0",
   "description": "Headless TypeScript implementation of the Dynamic Perception NMX motion controller serial protocol. Written fresh from the official protocol documentation (NMX Commands 0.13, MotionEngineProtocol).",
   "license": "MIT",
   "type": "module",

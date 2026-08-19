@@ -33,20 +33,6 @@ export function isTaught(l: AxisLimit): boolean {
 }
 
 /** True if `pos` is allowed for this axis. Untaught bounds never block. */
-export function withinLimit(l: AxisLimit, pos: number): boolean {
-  if (l.min !== null && pos < l.min) return false;
-  if (l.max !== null && pos > l.max) return false;
-  return true;
-}
-
-/** Clamp a position into the taught range. */
-export function clampToLimit(l: AxisLimit, pos: number): number {
-  let p = pos;
-  if (l.min !== null) p = Math.max(l.min, p);
-  if (l.max !== null) p = Math.min(l.max, p);
-  return p;
-}
-
 /**
  * Would jogging at `stepsPerSec` from `pos` run past a limit within `lookaheadMs`?
  * Used to stop a jog *before* it arrives, since we poll position rather than

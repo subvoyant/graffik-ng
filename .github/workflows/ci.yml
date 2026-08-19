@@ -44,6 +44,11 @@ jobs:
       # Two implementations of one wire protocol drift, and the direction that
       # hurts is the simulator being MORE permissive than the board: every test
       # passes and the rig fails. It had already happened once.
+      # A function that is exported, tested, passing and callable by nothing
+      # LOOKS covered. One shipped that way in v0.13 and was caught by luck.
+      - name: Dead-export audit
+        run: node scripts/audit-exports.mjs --strict
+
       - name: Protocol parity — simulator vs firmware
         run: node firmware/graffik-trig/test/parity.mjs
 

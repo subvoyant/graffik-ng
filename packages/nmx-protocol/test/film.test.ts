@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FILM_VERSION, deserializeFilm, newFilm, serializeFilm, migrateFilm,
-  filmDurationMs, filmCueMs, filmAxesToMs, filmTimecode, buildCueList, eventsInWindow,
+  filmDurationMs, filmCueMs, filmAxesToMs, buildCueList,
 } from "../src/film.js";
 import { Timebase } from "../src/timecode.js";
 
@@ -86,14 +86,6 @@ describe("the protocol boundary (frames -> ms)", () => {
     const f = newFilm("x", 240, TB_24);
     f.axes[0].points = [{ frame: 0, position: 0 }, { frame: 120, position: 5, velocity: 0.25 }, { frame: 240, position: 9 }];
     expect(filmAxesToMs(f)[0].points[1]).toEqual({ time: 5000, position: 5, velocity: 0.25 });
-  });
-
-  it("labels frames against the move's start timecode", () => {
-    const f = newFilm("x", 240, TB_24);
-    expect(filmTimecode(f, 0)).toBe("00:00:00:00");
-    f.startFrame = 86_400; // 01:00:00:00
-    expect(filmTimecode(f, 0)).toBe("01:00:00:00");
-    expect(filmTimecode(f, 24)).toBe("01:00:01:00");
   });
 });
 
@@ -181,15 +173,7 @@ describe("timeline events (ADR-0016)", () => {
     expect(buildCueList(f)[1].atMs).toBe(5005);   // 120 frames at 23.976
   });
 
-  it("selects events for a host-dispatch window, upper bound exclusive", () => {
-    const f = withEvents();
-    expect(eventsInWindow(f, 0, 121).map((e) => e.id)).toEqual(["e2", "e1"]);
-    expect(eventsInWindow(f, 121, 241).map((e) => e.id)).toEqual(["e3"]);
-    expect(eventsInWindow(f, 0, 120).map((e) => e.id)).toEqual(["e1"]);
-  });
-
   it("has no cues when the move has none", () => {
     expect(buildCueList(newFilm())).toEqual([]);
-    expect(eventsInWindow(newFilm(), 0, 999)).toEqual([]);
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NO_LIMITS, clampToLimit, describeViolations, isTaught, jogWouldExceed, violationsForFilm, withinLimit } from "../src/limits.js";
+import { NO_LIMITS, describeViolations, isTaught, jogWouldExceed, violationsForFilm } from "../src/limits.js";
 import { newFilm } from "../src/film.js";
 
 const L = { min: -1000, max: 5000 };
@@ -7,17 +7,7 @@ const L = { min: -1000, max: 5000 };
 describe("soft limits", () => {
   it("untaught bounds never block", () => {
     expect(isTaught(NO_LIMITS[0])).toBe(false);
-    expect(withinLimit({ min: null, max: null }, 999999)).toBe(true);
     expect(jogWouldExceed({ min: null, max: null }, 0, 4000)).toBe(false);
-  });
-
-  it("within/clamp respect taught bounds", () => {
-    expect(withinLimit(L, 0)).toBe(true);
-    expect(withinLimit(L, 5001)).toBe(false);
-    expect(withinLimit(L, -1001)).toBe(false);
-    expect(clampToLimit(L, 9999)).toBe(5000);
-    expect(clampToLimit(L, -9999)).toBe(-1000);
-    expect(clampToLimit(L, 250)).toBe(250);
   });
 
   it("jog lookahead stops before arrival, and never blocks moving AWAY from a limit", () => {

@@ -33,6 +33,9 @@ CXX=${CXX:-g++}
     -o "${TMPDIR:-/tmp}/graffik-fwtest" firmware/graffik-trig/test/test_firmware.cpp
 "${TMPDIR:-/tmp}/graffik-fwtest"
 
+step "dead-export audit"
+node scripts/audit-exports.mjs --strict
+
 step "protocol parity — TypeScript simulator vs C++ firmware"
 node firmware/graffik-trig/test/parity.mjs
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  CONTROL_ACTIONS, STOP_ACTION_ID, controlAction, HoldLatch,
+  CONTROL_ACTIONS, STOP_ACTION_ID, HoldLatch,
   DEFAULT_BUTTON_BINDINGS, unboundStopWarning, duplicateButtonBindings,
 } from "../src/index.js";
 
@@ -10,7 +10,7 @@ describe("the deliberation policy", () => {
    * fails, something has quietly made stopping harder or starting easier.
    */
   it("stops instantly and never asks anything to be held to stop", () => {
-    const stop = controlAction(STOP_ACTION_ID)!;
+    const stop = CONTROL_ACTIONS.find((a) => a.id === STOP_ACTION_ID)!;
     expect(stop.holdMs).toBe(0);
     expect(stop.motion).toBe(false);
   });

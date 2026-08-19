@@ -364,11 +364,6 @@ function migrateV3ToV4(f: Film): Film {
   };
 }
 
-/** Events whose fire frame falls in [from, to) — for host-side (Tier 1) dispatch. */
-export function eventsInWindow(f: Film, fromFrame: number, toFrame: number): FilmEvent[] {
-  return (f.events ?? []).filter((e) => e.frame >= fromFrame && e.frame < toFrame);
-}
-
 /* ------------------------------------------------------------------
    The protocol boundary: frames in, milliseconds out. Nothing upstream
    of these two functions should ever hold a millisecond (ADR-0014).
@@ -397,10 +392,6 @@ export function filmAxesToMs(f: Film): Array<{ axis: AxisIndex; points: KeyFrame
 }
 
 /** Timecode label for a frame within this move (honours `startFrame`). */
-export function filmTimecode(f: Film, frame: number): string {
-  return framesToTimecode(f.startFrame + frame, f.timebase);
-}
-
 /** A sensible empty film for a new document: 10 seconds at the given rate. */
 export function newFilm(name = "Untitled Move", durationFrames?: number, timebase: Timebase = DEFAULT_TIMEBASE): Film {
   const dur = durationFrames ?? Math.round((timebase.num / timebase.den) * 10);

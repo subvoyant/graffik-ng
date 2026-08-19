@@ -49,6 +49,24 @@ contextBridge.exposeInMainWorld("tc", {
  * every 40 ms, and a second copy in the renderer would be a second place for
  * "starting requires deliberation" to quietly stop being true.
  */
+/**
+ * Lens helpers, bridged rather than reimplemented (ADR-0024).
+ *
+ * The renderer had grown its own copy of the mark-interpolating formatter, its
+ * own axis constructor and its own map<->library-entry conversion — the exact
+ * duplication the timecode bridge exists to prevent, arrived at by the exact
+ * same route (a pure function in the core with no way to reach it from the UI).
+ * A dead-export audit found all four at once.
+ */
+contextBridge.exposeInMainWorld("lens", {
+  formatValue: (axis, position) => core.formatLensValue(axis, position),
+  positionFor: (map, value) => core.lensPositionFor(map, value),
+  newAxis: (kind, durationFrames) => core.newLensAxis(kind, durationFrames),
+  entryToMap: (entry) => core.lensEntryToMap(entry),
+  mapToEntry: (map, id, savedAt) => core.lensMapToEntry(map, id, savedAt),
+  UNITS: { ...core.LENS_UNITS },
+});
+
 contextBridge.exposeInMainWorld("controls", {
   ACTIONS: core.CONTROL_ACTIONS.map((a) => ({ ...a })),
   STOP_ACTION_ID: core.STOP_ACTION_ID,

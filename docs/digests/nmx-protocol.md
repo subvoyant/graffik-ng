@@ -1,6 +1,6 @@
 # Digest: @graffik-ng/nmx-protocol
 
-**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.16) · 340 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
+**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.17) · 337 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
 
 ## packet.ts — codec
 
@@ -55,7 +55,7 @@ Namespaces returning `Packet`: `general` (sub 0), `motors` (1–3, `Motor = 1|2|
 - `migrateFilm` v2→v3 only ADDS optional `lensAxes`; **v3→v4 REMOVES `lensAxes[].invert`** (ADR-0018 §5 — motor handedness is rig config, not part of a move) and writes the fact into `notes`, the same idiom as the v1→v2 timebase assumption. Versions go up even for additive changes so an older build **refuses** the file rather than opening it with the focus pull silently gone.
 - `buildLensProgram(film, {toleranceUnits?, motorSteps?})` — the lens counterpart to `buildCueList`, and it lives beside it because both cross the frames→ms boundary. Samples per frame from the shared solver, quantises to 0..65535, then **decimates** under an explicit vertical error bound (half a motor step by default): 1731 dense points → ~132 for a three-lane 24 s move. `lensProgramSize` reports the total. Peak rate is taken from the **dense** curve so decimation cannot hide a snap from the pre-flight.
 - `validateLensAxes(film)` rejects duplicate kinds (one focus lane, not two).
-- **Events (ADR-0016):** `FilmEvent {id, frame, durationFrames?, target, action, label?}`; `target` is a LOGICAL name so files stay portable between rigs. `buildCueList(film)` → device cue list in ms, sorted (Tier 2); `eventsInWindow(film, from, to)` → host dispatch, upper bound exclusive (Tier 1).
+- **Events (ADR-0016):** `FilmEvent {id, frame, durationFrames?, target, action, label?}`; `target` is a LOGICAL name so files stay portable between rigs. `buildCueList(film)` → device cue list in ms, sorted — and it feeds **both** tiers. (A separate `eventsInWindow` once served Tier 1; `CueScheduler` replaced it before v0.8 shipped and this line went on describing it for nine versions. The dead-export audit is what found that — ADR-0024.)
 
 ## export3d.ts — 3D camera export (ADR-0015)
 

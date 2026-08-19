@@ -28,3 +28,5 @@ Immutable decision records. Accepted = in force. Supersede, never edit. See ADR-
 | [0021](0021-physical-controls-stop-is-instant.md) | Physical controls: stopping is instant, starting is a hold | Accepted (unverified against a controller) |
 | [0022](0022-connection-doctor.md) | Connection doctor: silence vs noise, every address asked, ranked ports | Accepted (unverified against an NMX) |
 | [0023](0023-first-motion-creep-and-the-bringup-report.md) | Creep on an untaught axis; a bring-up report that states what is still unknown | Accepted |
+| [0024](0024-dead-export-audit.md) | Dead-export audit: "tested" is not "reachable" | Accepted |
+| [0025](0025-playhead-follows-the-pass.md) | Playhead follows a running pass, anchored to the firmware's clock | Accepted |

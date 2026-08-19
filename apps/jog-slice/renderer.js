@@ -55,6 +55,38 @@ if (!window.tc) {
   };
 }
 
+/* Browser-preview stub for the lens helpers. Layout only — under Electron
+   preload bridges the real, tested core in and this is unreachable. Same rule
+   as the timecode stub: never extend it into a second implementation. */
+if (!window.lens) {
+  const at = (map, p) => {
+    const m = map.marks;
+    if (p <= m[0].position) return m[0].value;
+    for (let i = 0; i < m.length - 1; i++) {
+      const a = m[i], b = m[i + 1];
+      if (p >= a.position && p <= b.position) return a.value + (b.value - a.value) * ((p - a.position) / (b.position - a.position));
+    }
+    return m[m.length - 1].value;
+  };
+  window.lens = {
+    formatValue: (ax, position) => {
+      if (!ax.map) return `${Math.round(position * 100)}%`;
+      const v = at(ax.map, position);
+      if (ax.kind === "iris") return `T${v.toFixed(1)}`;
+      if (ax.kind === "zoom") return `${Math.round(v)}mm`;
+      return `${v < 10 ? v.toFixed(2) : v.toFixed(1)}m`;
+    },
+    positionFor: () => 0.5,
+    newAxis: (kind, durationFrames) => ({
+      kind, target: kind,
+      keys: [{ frame: 0, position: 0.5 }, { frame: durationFrames, position: 0.5 }],
+    }),
+    entryToMap: (e) => ({ name: e.name, kind: e.kind, marks: e.marks.map((m) => ({ ...m })) }),
+    mapToEntry: (map, id) => ({ id, name: map.name, kind: map.kind, marks: map.marks.map((m) => ({ ...m })) }),
+    UNITS: { focus: { unit: "m" }, iris: { unit: "T" }, zoom: { unit: "mm" } },
+  };
+}
+
 /* Browser-preview stub for the control policy (ADR-0021). Layout only — under
    Electron preload bridges the real, tested values in and this is unreachable.
    Kept in step with the core by the same rule as the timecode stub: never
@@ -570,6 +602,7 @@ const CONTROL_RUN = {
   estop: async () => {
     await window.nmx.stopAll();
     stopGamepad();
+    clearInterval(pollTimer); endPassSweep();
     status("STOP ALL — from the controller. Everything halted.");
     logPass("STOP ALL (physical button)");
   },
@@ -1077,13 +1110,35 @@ function render() {
     }
   });
 
-  /* playhead */
+  /* playhead — and during a CLASSIC pass it is a different colour with a tag,
+     because the lanes below it are not the move that is running (ADR-0025).
+     A normal white playhead sweeping these curves would say "the rig is here,
+     on this curve", and during a 2-point pass that is simply untrue. */
+  const running = passSweep !== null;
+  const classic = passSweep?.engine === "classic";
   const px = fToX(playheadFrame, rTop);
   if (px >= PAD_L - 1 && px <= w - PAD_R + 1) {
-    ctx.strokeStyle = "rgba(232,234,237,.55)"; ctx.beginPath();
-    ctx.moveTo(px + .5, RULER); ctx.lineTo(px + .5, h); ctx.stroke();
-    ctx.fillStyle = INK; ctx.beginPath();
+    /* A running KF playhead is BRIGHTER INK, not a hue. `--accent` is the same
+       blue as the Slide trace, so an accent-coloured playhead was invisible
+       against its own curve — and per ADR-0012 chrome wears ink while the
+       palette belongs to the series. Classic is the one exception, because it
+       is carrying a warning rather than a state. */
+    ctx.strokeStyle = classic ? "rgba(201,133,0,.85)" : running ? "rgba(255,255,255,.95)" : "rgba(232,234,237,.55)";
+    ctx.lineWidth = running ? 2 : 1;
+    ctx.beginPath(); ctx.moveTo(px + .5, RULER); ctx.lineTo(px + .5, h); ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.fillStyle = classic ? css.getPropertyValue("--warn").trim() : running ? "#ffffff" : INK;
+    ctx.beginPath();
     ctx.moveTo(px - 5, RULER - 9); ctx.lineTo(px + 5, RULER - 9); ctx.lineTo(px, RULER - 1); ctx.closePath(); ctx.fill();
+    if (classic) {
+      const tag = "2-POINT PASS \u00b7 these lanes are not running";
+      ctx.font = "600 9px system-ui";
+      const tw = ctx.measureText(tag).width;
+      const tx = Math.min(px + 7, w - PAD_R - tw - 4);
+      ctx.fillStyle = "rgba(14,16,19,.85)"; ctx.fillRect(tx - 3, RULER + 2, tw + 6, 13);
+      ctx.fillStyle = css.getPropertyValue("--warn").trim();
+      ctx.fillText(tag, tx, RULER + 11.5);
+    }
   }
 
   $("playheadLabel").textContent = tcOf(playheadFrame);
@@ -1319,24 +1374,17 @@ $("kfDelete").onclick = () => selection?.kind === "key" && delKey(selection.trac
 
 /* ---------------- lens axes (ADR-0017) ---------------- */
 
-/** Real units where the lens is mapped, percent where it is not — never a fake distance. */
+/**
+ * Real units where the lens is mapped, percent where it is not.
+ *
+ * Bridged from the core, not reimplemented. This function used to be a second
+ * copy of `formatLensValue` living here because nothing exposed the original —
+ * which is precisely how the timecode duplication would have happened if
+ * preload had not bridged that too (ADR-0014, ADR-0024). A dead-export audit
+ * found the copy.
+ */
 function formatLens(ax, position) {
-  if (!ax.map) return `${Math.round(position * 100)}%`;
-  const m = ax.map.marks;
-  /* No flip. The lane IS barrel travel; which way the motor turns to get there
-     is rig configuration and lives in the motor settings (ADR-0018). */
-  const p = position;
-  let v = m[m.length - 1].value;
-  if (p <= m[0].position) v = m[0].value;
-  else {
-    for (let i = 0; i < m.length - 1; i++) {
-      const a = m[i], b = m[i + 1];
-      if (p >= a.position && p <= b.position) { v = a.value + (b.value - a.value) * ((p - a.position) / (b.position - a.position)); break; }
-    }
-  }
-  if (ax.kind === "iris") return `T${v.toFixed(1)}`;
-  if (ax.kind === "zoom") return `${Math.round(v)}mm`;
-  return `${v < 10 ? v.toFixed(2) : v.toFixed(1)}m`;
+  return window.lens.formatValue(ax, position);
 }
 
 /**
@@ -1359,10 +1407,7 @@ function addLensAxis(kind) {
   snapshot();
   film.lensAxes = film.lensAxes ?? [];
   if (film.lensAxes.some((a) => a.kind === kind)) return status(`${kind} is already on the timeline.`);
-  film.lensAxes.push({
-    kind, target: kind,
-    keys: [{ frame: 0, position: 0.5 }, { frame: film.durationFrames, position: 0.5 }],
-  });
+  film.lensAxes.push(window.lens.newAxis(kind, film.durationFrames));
   film.lensAxes.sort((a, b) => LENS_AXES.findIndex((d) => d.kind === a.kind) - LENS_AXES.findIndex((d) => d.kind === b.kind));
   uploaded = false;
   refreshLens(); syncInputs(); refreshLensDriven();
@@ -1736,8 +1781,7 @@ $("lensLibPick").onchange = () => {
   const entry = lensLib.find((e) => e.id === $("lensLibPick").value);
   if (!ax || !entry) { lensLibCurrent = null; return refreshLensLibrary(ax ?? lensAxesOf()[0]); }
   snapshot();                                   // applying a lens is undoable
-  ax.map = { name: entry.name, kind: entry.kind, marks: entry.marks.map((m) => ({ ...m })),
-             ...(entry.notes ? { notes: entry.notes } : {}) };
+  ax.map = window.lens.entryToMap(entry);
   lensLibCurrent = entry.id;
   renderLensMarks(); refreshLens(); updateInspector(); render();
   status(`${entry.name} applied to the ${ax.kind} lane — ${entry.marks.length} marks.`);
@@ -1749,9 +1793,7 @@ $("lensLibSave").onclick = async () => {
   const name = $("lensMapName").value.trim() || ax.map.name;
   try {
     const saved = await window.nmx.lensLibrarySave({
-      id: lensLibCurrent ?? "", name, kind: ax.kind,
-      marks: ax.map.marks.map((m) => ({ ...m })),
-      ...(ax.map.notes ? { notes: ax.map.notes } : {}),
+      ...window.lens.mapToEntry({ ...ax.map, name, kind: ax.kind }, lensLibCurrent ?? ""),
     });
     lensLibCurrent = saved.id;
     ax.map.name = saved.name;
@@ -2378,6 +2420,65 @@ $("exGo").onclick = async () => {
   } catch (e) { status("Export failed: " + e.message); }
 };
 
+/* ------------------------------------------------------------------
+   The playhead follows a running pass (ADR-0025)
+
+   Two rules, and both matter:
+
+   1. THE FIRMWARE'S PERCENT IS THE TRUTH. The device runs the move off its
+      own clock (ADR-0005); a host timer would drift away from it and the
+      playhead would start lying about where the rig is. The local clock only
+      SMOOTHS between the 500 ms polls, and every reading re-anchors it.
+      Extrapolation is capped, so a stalled controller shows a stalled
+      playhead rather than a confident one that has run ahead.
+
+   2. A CLASSIC PASS IS NOT THE TIMELINE. The lanes show the key-frame move;
+      a 2-point pass runs between taught marks and is a different move
+      entirely. Sweeping a normal playhead across those curves would say "the
+      rig is here, on this curve", which is false — so the classic sweep is
+      drawn in warning colour and labelled.
+   ------------------------------------------------------------------ */
+
+let passSweep = null;   // {engine, durationFrames, pct, atMs, msPerPct}
+let sweepTimer = null;
+
+function startPassSweep(engine, durationFrames) {
+  const ms = TC.framesToMsExact(Math.max(1, durationFrames), film.timebase);
+  passSweep = { engine, durationFrames, pct: 0, atMs: performance.now(), msPerPct: ms / 100 };
+  clearInterval(sweepTimer);
+  sweepTimer = setInterval(() => {
+    if (!passSweep) return;
+    const since = performance.now() - passSweep.atMs;
+    /* Never more than one poll interval ahead of the last real reading. */
+    const ahead = Math.min(since / passSweep.msPerPct, 500 / passSweep.msPerPct);
+    const pct = Math.max(0, Math.min(100, passSweep.pct + ahead));
+    playheadFrame = Math.round((pct / 100) * passSweep.durationFrames);
+    followPlayhead();
+    render();
+    syncInputs();
+  }, 40);
+}
+
+/** Re-anchor on a real reading from the controller. */
+function anchorPassSweep(percent) {
+  if (!passSweep || !Number.isFinite(percent)) return;
+  passSweep.pct = percent;
+  passSweep.atMs = performance.now();
+}
+
+function endPassSweep() {
+  clearInterval(sweepTimer); sweepTimer = null; passSweep = null;
+  render();
+}
+
+/** Keep the playhead on screen when the view is zoomed in. */
+function followPlayhead() {
+  const span = view.f1 - view.f0;
+  if (playheadFrame >= view.f0 && playheadFrame <= view.f1) return;
+  view.f0 = Math.max(-20, playheadFrame - span * 0.25);
+  view.f1 = view.f0 + span;
+}
+
 /* ---------------- KF transport ---------------- */
 $("tlUpload").onclick = async () => {
   try {
@@ -2416,21 +2517,27 @@ $("tlRun").onclick = async () => {
     await window.nmx.cuesStart();
     logPass(`KF pass ${kfPassCount} — “${film.name}”`);
     clearInterval(pollTimer);
+    startPassSweep("kf", film.durationFrames);
     pollTimer = setInterval(async () => {
       try {
         const p = await window.nmx.kfProgress();
         $("tlProg").style.width = (p.percent ?? 0) + "%";
+        anchorPassSweep(p.percent);
         if (p.state === 0 && (p.percent ?? 0) > 0) {
-          clearInterval(pollTimer); logPass(`KF pass ${kfPassCount} complete`);
+          clearInterval(pollTimer); endPassSweep();
+          playheadFrame = film.durationFrames;      // where the rig actually is
+          syncInputs(); render();
+          logPass(`KF pass ${kfPassCount} complete`);
           reportCueDelivery();
           status(`Pass ${kfPassCount} complete. ⏮ then reposition, run again.`);
         }
-      } catch { clearInterval(pollTimer); }
+      } catch { clearInterval(pollTimer); endPassSweep(); }
     }, 500);
   } catch (e) { status("Run blocked: " + e.message); }
 };
 $("tlStop").onclick = async () => {
-  clearInterval(pollTimer); await window.nmx.kfStop(); await window.nmx.cuesStop();
+  clearInterval(pollTimer); endPassSweep();
+  await window.nmx.kfStop(); await window.nmx.cuesStop();
   status("Key-frame program stopped.");
 };
 
@@ -2456,15 +2563,20 @@ $("run").onclick = async () => {
     await window.nmx.cuesStart();
     logPass(`classic pass ${passCount}`);
     clearInterval(pollTimer);
+    /* Swept against the CLASSIC duration, not the film's — they are different
+       moves, and the ruler is a time axis either way. */
+    startPassSweep("classic", Math.max(1, Math.round(Number($("travel").value))));
     pollTimer = setInterval(async () => {
       try {
         const p = await window.nmx.progress();
         $("prog").style.width = (p.percent ?? 0) + "%";
+        anchorPassSweep(p.percent);
         if (!p.running && (p.percent ?? 0) > 0) {
-          clearInterval(pollTimer); logPass(`classic pass ${passCount} complete`); status(`Pass ${passCount} complete.`);
+          clearInterval(pollTimer); endPassSweep();
+          logPass(`classic pass ${passCount} complete`); status(`Pass ${passCount} complete.`);
           reportCueDelivery();
         }
-      } catch { clearInterval(pollTimer); }
+      } catch { clearInterval(pollTimer); endPassSweep(); }
     }, 500);
   } catch (e) { status("Run blocked: " + e.message); }
 };
@@ -2484,7 +2596,13 @@ $("camOff").onclick = async () => { await window.nmx.camDisable(); status("Camer
 /* ---------------- e-stop ---------------- */
 $("estop").onclick = async () => {
   clearInterval(pollTimer); $("countdown").style.display = "none"; stopGamepad();
-  try { await window.nmx.stopAll(); status("STOP ALL — broadcast stop, both engines, and every armed cue aborted."); }
+  try {
+    await window.nmx.stopAll();
+    /* Freeze the playhead where the rig stopped. A sweep that carries on after
+       an e-stop is the UI asserting motion that has been halted. */
+    clearInterval(pollTimer); endPassSweep();
+    status("STOP ALL — broadcast stop, both engines, and every armed cue aborted.");
+  }
   catch (e) { status("STOP ALL error: " + e.message); }
 };
 
