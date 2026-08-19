@@ -21,6 +21,14 @@ Written **before** hardware arrives so the session is spent shooting, not decidi
 
 ## Phase 1 — first contact (~10 min)
 
+> **If Connect fails, press Diagnose…** (ADR-0022). It asks every plausible
+> address and counts the raw bytes that came back, which separates the six
+> causes that all present as the same timeout: charge-only cable, unpowered NMX,
+> BLE mode instead of USB, wrong port, non-default address, wrong baud. In
+> particular — **silence means nothing is talking to us; garbage means something
+> is and we cannot hear it**, and the second one is almost always the baud rate.
+> The port list is ranked too: Bluetooth entries are marked, not hidden.
+
 | # | Action | Expected | If not |
 |---|---|---|---|
 | 1 | Plug NMX into USB, launch app, ↻ | A `/dev/tty.usbserial-*` or `usbmodem-*` appears | Try another cable (charge-only cables are the classic trap); power-cycle the NMX |

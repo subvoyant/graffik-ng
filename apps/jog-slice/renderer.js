@@ -152,6 +152,11 @@ if (!window.nmx) {
     lensLibraryDelete: async () => 0,
     lensLibraryExport: async () => null,
     lensLibraryImport: async () => null,
+    diagnose: async () => ({
+      probes: [{ address: 3, answered: false, firmware: null, bytesSeen: 0 }],
+      answeringAddress: null, firmware: null, bytesSeen: 0, verdict: "silence",
+      headline: "Browser preview — nothing to probe.", steps: ["Run under Electron with a rig attached."],
+    }),
     commissionState: async () => ({
       spans: { slide: [{ steps: 80000, measured: 500, note: "steel rule" }, { steps: 64000, measured: 400 }], pan: [], tilt: [] },
       marked: { slide: null, pan: null, tilt: null },
@@ -350,11 +355,18 @@ function setConnected(on) {
   }
   $("connDot").className = "dot" + (on ? " on" : "");
 }
+/** The port list, ranked. Bluetooth entries are marked, not hidden — hiding a
+    port the operator can see in the system would look like a missing device. */
 async function refreshPorts() {
-  const ports = await window.nmx.listPorts();
+  const r = await window.nmx.listPorts();
+  const ports = r.ports ?? r;                        // tolerate the old shape
+  const mark = { likely: "", unlikely: "  ·  ?", never: "  ·  not a rig" };
+  ports.sort((a, b) => (RANK[a.likelihood] ?? 1) - (RANK[b.likelihood] ?? 1));
   $("ports").innerHTML = ports.map((p) =>
-    `<option value="${p.path}">${p.path}${p.manufacturer ? " — " + p.manufacturer : ""}</option>`).join("");
+    `<option value="${p.path}">${p.path}${p.manufacturer ? " — " + p.manufacturer : ""}${mark[p.likelihood] ?? ""}</option>`).join("");
+  if (r.advice) status(r.advice);
 }
+const RANK = { likely: 0, unlikely: 1, never: 2 };
 $("refresh").onclick = refreshPorts;
 $("connect").onclick = async () => {
   try {
@@ -365,6 +377,7 @@ $("connect").onclick = async () => {
     }
     const info = await window.nmx.connect($("ports").value);
     setConnected(true);
+    $("diagnose").style.display = "none";
     $("connect").textContent = "Disconnect";
     const chip = $("fwchip");
     chip.style.display = ""; chip.textContent = "fw v" + info.firmwareVersion;
@@ -374,8 +387,36 @@ $("connect").onclick = async () => {
     status(info.supported
       ? "Connected · Graffik mode on · joystick watchdog armed."
       : `Firmware v${info.firmwareVersion} ≠ verified v70 — programmed moves blocked. Update the NMX, or override at your own risk.`);
-  } catch (e) { status("Connect failed: " + e.message); }
+  } catch (e) {
+    /* A failed handshake is one symptom with half a dozen causes. Offering the
+       doctor at the moment of failure is the only time anybody will run it
+       (ADR-0022). */
+    status("Connect failed: " + e.message);
+    $("diagnose").style.display = "";
+  }
 };
+
+$("diagnose").onclick = async () => {
+  const path = $("ports").value;
+  $("diagnose").disabled = true;
+  status(`Asking every address on ${path}…`);
+  try {
+    const r = await window.nmx.diagnose(path);
+    $("diagHeadline").textContent = r.headline;
+    $("diagHeadline").style.color = r.verdict === "ok" ? "var(--ok)" : r.verdict === "silence" ? "var(--danger-hi)" : "var(--warn)";
+    $("diagSteps").innerHTML = r.steps.length
+      ? r.steps.map((t) => `<li>${t}</li>`).join("")
+      : "<li>Nothing to fix — try Connect again.</li>";
+    $("diagDetail").textContent =
+      `verdict ${r.verdict} · ${r.bytesSeen} bytes seen · asked ${r.probes.map((p) => p.address).join(", ") || "nothing"}`;
+    $("diagModal").classList.add("open");
+    logPass(`connection doctor: ${r.verdict} — ${r.headline}`);
+  } catch (e) {
+    status("Diagnose failed: " + e.message);
+  }
+  $("diagnose").disabled = false;
+};
+
 $("fwOverride").onclick = async () => {
   await window.nmx.overrideFirmwareGate();
   status("Firmware gate overridden — verify every move at low speed first.");
@@ -2016,7 +2057,8 @@ function setTier(tier, deviceLabel) {
 }
 
 async function refreshCuePorts() {
-  const ports = await window.nmx.listPorts();
+  const r = await window.nmx.listPorts();
+  const ports = r.ports ?? r;
   const opts = ports.map((p) => `<option value="${p.path}">${p.path}${p.manufacturer ? " — " + p.manufacturer : ""}</option>`).join("");
   $("cuePort").innerHTML = opts;
   $("dmxPort").innerHTML = opts;

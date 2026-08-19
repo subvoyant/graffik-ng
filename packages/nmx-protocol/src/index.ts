@@ -14,3 +14,4 @@ export * from "./osc.js";
 export * from "./lens.js";
 export * from "./commission.js";
 export * from "./controls.js";
+export * from "./diagnose.js";

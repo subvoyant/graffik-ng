@@ -26,3 +26,4 @@ Immutable decision records. Accepted = in force. Supersede, never edit. See ADR-
 | [0019](0019-lens-library.md) | Lens library: marks belong to a lens, merged by id, never replaced | Accepted |
 | [0020](0020-commissioning-measured-not-guessed.md) | Commissioning: the app measures the rig — spans, spread, and named suspects | Accepted |
 | [0021](0021-physical-controls-stop-is-instant.md) | Physical controls: stopping is instant, starting is a hold | Accepted (unverified against a controller) |
+| [0022](0022-connection-doctor.md) | Connection doctor: silence vs noise, every address asked, ranked ports | Accepted (unverified against an NMX) |

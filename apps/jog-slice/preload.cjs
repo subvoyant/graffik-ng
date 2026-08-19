@@ -60,6 +60,7 @@ contextBridge.exposeInMainWorld("controls", {
 contextBridge.exposeInMainWorld("nmx", {
   // connection
   listPorts: () => ipcRenderer.invoke("nmx:list-ports"),
+  diagnose: (path) => ipcRenderer.invoke("nmx:diagnose", path),
   connect: (path) => ipcRenderer.invoke("nmx:connect", path),
   disconnect: () => ipcRenderer.invoke("nmx:disconnect"),
   overrideFirmwareGate: () => ipcRenderer.invoke("nmx:override-firmware-gate"),

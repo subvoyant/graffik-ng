@@ -1,6 +1,6 @@
 # Digest: apps/jog-slice (Electron app)
 
-**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.14) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
+**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.15) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
 
 ## Shape
 
@@ -131,6 +131,12 @@ Layout is a fixed frame — appbar / rail(244px) / stage / statusbar — with **
 - **`nmx:cues-arm` uploads the lens program BEFORE `ARM`.** `ARM` is what latches it and its reply carries the count the backend cross-checks; uploading after would arm an empty curve.
 - **`nmx:cue-check` returns `lensProblems` too, and `armCuesForPass` is one gate for both.** Two gates would be two chances to skip one, and both failures cost the same thing — a take.
 - ⌾ Lens… modal layout follows the *workflow*: marks table → add-mark row → **Jog** (drives the barrel and fills the "At" field, so marking is drive-read-type) → MOTOR subhead → device chip + Calibrate + travel → top speed + handedness. The jog was originally down in the motor block, which broke the marking loop and wrapped the Calibrate button onto its own line. `#lensMarkRows` is capped at 190 px and scrolls — a real lens map runs to a dozen marks and the sheet must not outgrow the window.
+## Connection doctor (v0.15 — ADR-0022)
+
+- `nmx:list-ports` now returns `{ports:[{path,manufacturer,likelihood,why}], advice}`. The renderer sorts likely-first and **marks** unlikely/never entries rather than hiding them. Both port pickers (rail, cue dialog) tolerate the old array shape.
+- `nmx:diagnose` opens its **own** port — it runs after the normal connect has already failed, so there is nothing to reuse and it must not disturb a connection that worked. Failure to *open* short-circuits to its own, more specific diagnosis (something else has the port).
+- The **Diagnose… button appears only after a failed connect** and disappears on a successful one. Offering it before there is a problem is clutter nobody reads at the moment it matters.
+
 ## Physical controls (v0.14 — ADR-0021)
 
 - **TWO gamepad loops, and the distinction is load-bearing.** The jog loop runs only while gamepad jog is toggled on. The **button loop runs at 40 ms whenever a controller is present** — regardless of the jog toggle, of which dialog is open, or of what has DOM focus. Hanging the e-stop off the jog toggle would have made it work only while jogging, and the moment you most want a physical stop is during a programmed pass.

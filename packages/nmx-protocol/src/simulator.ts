@@ -103,6 +103,15 @@ export class SimulatedNmx implements PortLike {
     if (event === "data") this.listeners.push(listener);
   }
 
+  /** Detach a listener. A real SerialPort can; a simulator that cannot is a
+      simulator that quietly leaks in any code that taps the port temporarily
+      (the connection doctor does exactly that). */
+  off(event: "data", listener: DataListener): void {
+    if (event !== "data") return;
+    const i = this.listeners.indexOf(listener);
+    if (i >= 0) this.listeners.splice(i, 1);
+  }
+
   private emitReply(payload: Uint8Array): void {
     const frame = new Uint8Array(PACKET_HEADER.length + 4 + payload.length);
     frame.set(PACKET_HEADER, 0);

@@ -1,6 +1,6 @@
 # Digest: @graffik-ng/nmx-protocol
 
-**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.14) · 307 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
+**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.15) · 324 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
 
 ## packet.ts — codec
 
@@ -91,6 +91,14 @@ Namespaces returning `Packet`: `general` (sub 0), `motors` (1–3, `Motor = 1|2|
 - `mergeLensLibrary(existing, incoming)` → `{merged, added, updated, rejected}`. **A malformed entry does NOT sink the import** — the survivors go in and the casualties are named. Deliberately the opposite of a move file: a move is one indivisible thing, a library is a collection. `merged` is always sorted by kind then name so a picker is readable.
 - `validateLensLibraryEntry` delegates to `validateLensMap` — an entry that would be rejected as a map cannot be used, and finding that out at apply time is too late.
 - `lensEntryToMap` / `lensMapToEntry` **copy** their marks; mutating one must not reach the other.
+
+## diagnose.ts — the connection doctor (ADR-0022)
+
+- **Silence vs noise is the whole point.** Zero bytes = nothing is talking to us (power, cable, BLE mode, wrong port). Bytes that never form a valid frame = something IS talking and we cannot hear it — a **baud mismatch** (19200 8N1) or a different device. A timeout throws that distinction away; `probeNmx` taps the port's raw data alongside the client so it survives.
+- Asks `PROBE_ADDRESSES` = 3, 2, 4, 5, 6, 7, 8 and stops at the first answer. A non-default address is a legitimate config (two controllers on one bus) that presents as a dead link. Broadcast (1) is skipped — it never replies by design. Having asked, the silence report **says so**, so nobody re-checks it.
+- `explainProbe(probes, ctx)` is a **pure function** over evidence — no port, no timers, no IO — so the reasoning is what is under test rather than the plumbing.
+- `judgePort` / `judgePorts` / `noUsablePortAdvice` rank a port list by name and manufacturer. Unlikely entries are **marked, not hidden**: hiding a port the operator can see in the system looks like a missing device.
+- The probe opens its own port and detaches its tap. `SimulatedNmx` gained `off()` for this — a simulator that cannot detach a listener is less capable than the thing it stands in for.
 
 ## controls.ts — physical control policy (ADR-0021)
 

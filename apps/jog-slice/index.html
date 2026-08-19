@@ -267,6 +267,10 @@ input[type=text] { font-size: 11.5px; }
   <select id="ports" style="min-width:250px"></select>
   <button id="refresh" class="icon" title="Rescan ports">⟳</button>
   <button id="connect" class="primary">Connect</button>
+  <!-- Appears only after a failed connect. Offering it before there is a
+       problem is clutter; offering it at the moment of failure is the only
+       time anybody will actually run it (ADR-0022). -->
+  <button id="diagnose" style="display:none" title="Ask every address and work out why">Diagnose…</button>
   <span id="fwchip" class="chip" style="display:none"></span>
   <button id="fwOverride" style="display:none">Override gate</button>
   <span class="grow"></span>
@@ -602,6 +606,23 @@ input[type=text] { font-size: 11.5px; }
         <button id="lensLibImport" title="Merge a library file into this one — never replaces">Import…</button>
         <button id="lensLibExport" title="Write the whole library to a file">Export…</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="diagModal">
+  <div class="sheet" style="width:560px">
+    <header>Connection doctor <span class="grow"></span><button data-close>✕</button></header>
+    <div class="body">
+      <div id="diagHeadline" style="font-size:12px;font-weight:600"></div>
+      <div style="font-size:10.5px;color:var(--ink-faint)">
+        A handshake that times out looks the same whether the cable is charge-only, the NMX is unpowered
+        or in BLE mode, the wrong port was picked, or the device address is not 3. This asks every
+        address and counts what came back, so those stop looking alike.
+      </div>
+      <header class="subhead">Try these, in order</header>
+      <ul id="diagSteps" style="margin:0;padding-left:18px;font-size:11px;line-height:1.7"></ul>
+      <div id="diagDetail" class="tcread" style="margin-top:4px"></div>
     </div>
   </div>
 </div>

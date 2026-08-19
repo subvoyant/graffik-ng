@@ -24,6 +24,7 @@ import {
   serializeLensLibrary, parseLensLibrary, mergeLensLibrary,
   validateLensLibraryEntry, lensLibraryId,
   fitCalibration, diagnoseCalibration, repeatability,
+  probeNmx, judgePorts, noUsablePortAdvice,
   NO_LIMITS, isTaught, jogWouldExceed, violationsForFilm, describeViolations,
 } from "@graffik-ng/nmx-protocol";
 
@@ -271,10 +272,55 @@ function ensureJogMonitor(win) {
 
 ipcMain.handle("nmx:list-ports", async () => {
   const ports = await SerialPort.list();
-  return [
+  const all = [
     ...ports.map((p) => ({ path: p.path, manufacturer: p.manufacturer ?? "" })),
     { path: SIM_PORT, manufacturer: "demo mode — no hardware" },
   ];
+  /* Ranked, not just listed. A macOS port list is mostly Bluetooth entries and
+     on a first bring-up nobody knows which of eight identical-looking paths is
+     the rig (ADR-0022). */
+  const judged = judgePorts(all);
+  return {
+    ports: all.map((p, i) => ({ ...p, likelihood: judged[i].likelihood, why: judged[i].why })),
+    advice: noUsablePortAdvice(judged.filter((j) => !j.path.startsWith("simulator://"))),
+  };
+});
+
+/**
+ * Ask every plausible address and report what came back.
+ *
+ * Opens its OWN port rather than reusing a live client: this runs when the
+ * normal connect has already failed, so there is nothing to reuse, and it must
+ * not disturb a connection that did succeed.
+ */
+ipcMain.handle("nmx:diagnose", async (_e, portPath) => {
+  if (portPath === SIM_PORT) {
+    return probeNmx(new SimulatedNmx(), { timeoutMs: 200, expectedFirmware: SUPPORTED_FIRMWARE });
+  }
+  let probePort = null;
+  try {
+    probePort = new SerialPort({ path: portPath, baudRate: 19200, autoOpen: false });
+    await new Promise((res, rej) => probePort.open((err) => (err ? rej(err) : res())));
+    return await probeNmx(probePort, {
+      timeoutMs: 400,
+      expectedFirmware: SUPPORTED_FIRMWARE,
+      portLooksLikeBluetooth: /bluetooth|incoming-port/i.test(portPath),
+    });
+  } catch (err) {
+    /* Failing to OPEN is its own diagnosis, and a much more specific one than
+       anything the probe could have said. */
+    return {
+      probes: [], answeringAddress: null, firmware: null, bytesSeen: 0, verdict: "silence",
+      headline: `The port would not open: ${err.message}`,
+      steps: [
+        /^.*(busy|resource|access|EBUSY|EACCES).*$/i.test(err.message)
+          ? "Something else has this port open — a serial monitor, the Arduino IDE, or another copy of this app."
+          : "Check the device is still plugged in, then rescan the port list.",
+      ],
+    };
+  } finally {
+    if (probePort?.isOpen) await new Promise((r) => probePort.close(() => r()));
+  }
 });
 ipcMain.handle("nmx:connect", (_e, p) => connect(p));
 ipcMain.handle("nmx:disconnect", () => disconnect());
