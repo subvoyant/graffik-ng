@@ -20,7 +20,8 @@ graffik-ng/
 │                              # `npm run dist` → unsigned .dmg (electron-builder)
 ├── firmware/graffik-trig/     # reference Arduino firmware (GRAFFIK-TRIG v2: cues + lens axes)
 │   └── test/ host shim + protocol-parity check vs the TS simulator — both in CI
-├── .github/workflows/ci.yml   # test matrix (ubuntu+macos, `npm ci`) + unsigned dmg artifact on main
+├── scripts/check.sh           # everything CI runs, one command — use this, not a pasted block
+├── .github/workflows/ci.yml   # test matrix (ubuntu+macos, `npm ci`) + firmware + parity + dmg on main
 └── docs/ adr/ (why, 0000-0018) + digests/ (how, you are here)
     + DECISIONS.md (running session log) + DEVELOPMENT.md (setup/daily-loop/troubleshooting)
     + HARDWARE-BRINGUP.md (first-contact + repeatability + rig calibration) + images/

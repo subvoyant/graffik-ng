@@ -4,6 +4,23 @@ Practical how-to for working on Graffik NG. For *why* the project is built this
 way, see [`adr/`](adr/README.md); for *how the code is laid out*, see
 [`digests/HUB.md`](digests/HUB.md).
 
+## Run everything
+
+```bash
+./scripts/check.sh
+```
+
+Build, typecheck, 248 core tests, the CLI smoke test, the firmware exercise and
+the simulator-vs-firmware protocol parity check — the same things CI runs, in the
+same order. Run this before every commit.
+
+**Do not paste command lines with `#` comments into zsh.** zsh does not enable
+interactive comments by default, so `npm test --prefix packages/nmx-protocol  # 248`
+hands `#` and `248` to vitest as test-name filters and it exits with
+"No test files found" — which reads like a broken repo and is a broken
+instruction. That is why this script exists.
+
+
 ## Prerequisites
 
 - **Node 18+** (`node --version`). Node 22 LTS or newer recommended; CI runs 22.
