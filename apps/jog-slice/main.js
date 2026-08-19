@@ -57,6 +57,12 @@ const DEFAULT_PREFS = {
     deadzone: 0.15,   // fraction of stick travel ignored at centre
     curve: 2.0,       // response exponent: 1 linear, 2 quadratic, 3 cubic
     maxSpeedPct: 100, // scales the jog-speed field at full deflection
+    /* Physical buttons (ADR-0021). Nothing is bound by default — a guessed
+       e-stop is worse than none, because the operator would believe in it. */
+    buttons: {
+      estop: { index: null }, runPass: { index: null }, gotoStart: { index: null },
+      jogToggle: { index: null }, markKey: { index: null },
+    },
   },
   recent: [],
   /* Lens motors are rig configuration, not part of a move (ADR-0018).
@@ -122,6 +128,11 @@ function loadPrefs() {
       gamepad: {
         ...DEFAULT_PREFS.gamepad, ...(raw.gamepad ?? {}),
         bindings: { ...DEFAULT_PREFS.gamepad.bindings, ...(raw.gamepad?.bindings ?? {}) },
+        /* Guarded like every other sub-object. A corrupt buttons map must not be
+           able to leave the e-stop silently unbound — and merging over the
+           defaults means an older preferences file simply has nothing bound,
+           which the UI then says out loud (ADR-0021). */
+        buttons: { ...DEFAULT_PREFS.gamepad.buttons, ...(raw.gamepad?.buttons ?? {}) },
       },
       limits: Array.isArray(raw.limits) && raw.limits.length === 3 ? raw.limits : structuredClone(NO_LIMITS),
       /* `recent` was the one sub-object without a guard, and it is read with

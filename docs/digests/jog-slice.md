@@ -1,6 +1,6 @@
 # Digest: apps/jog-slice (Electron app)
 
-**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.13) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
+**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.14) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
 
 ## Shape
 
@@ -131,6 +131,15 @@ Layout is a fixed frame — appbar / rail(244px) / stage / statusbar — with **
 - **`nmx:cues-arm` uploads the lens program BEFORE `ARM`.** `ARM` is what latches it and its reply carries the count the backend cross-checks; uploading after would arm an empty curve.
 - **`nmx:cue-check` returns `lensProblems` too, and `armCuesForPass` is one gate for both.** Two gates would be two chances to skip one, and both failures cost the same thing — a take.
 - ⌾ Lens… modal layout follows the *workflow*: marks table → add-mark row → **Jog** (drives the barrel and fills the "At" field, so marking is drive-read-type) → MOTOR subhead → device chip + Calibrate + travel → top speed + handedness. The jog was originally down in the motor block, which broke the marking loop and wrapped the Calibrate button onto its own line. `#lensMarkRows` is capped at 190 px and scrolls — a real lens map runs to a dozen marks and the sheet must not outgrow the window.
+## Physical controls (v0.14 — ADR-0021)
+
+- **TWO gamepad loops, and the distinction is load-bearing.** The jog loop runs only while gamepad jog is toggled on. The **button loop runs at 40 ms whenever a controller is present** — regardless of the jog toggle, of which dialog is open, or of what has DOM focus. Hanging the e-stop off the jog toggle would have made it work only while jogging, and the moment you most want a physical stop is during a programmed pass.
+- `padCfg.buttons[actionId] = {index|null}` in prefs, guarded on load. Binding is **learn-by-pressing** because button indices are not standardised across devices; clicking a bound row's button **unbinds** it.
+- `padLearning` blocks the action loop during a capture, so a learn press cannot also fire what it is being bound to.
+- **A vanished controller mid-jog now zeroes every axis** and says so. It used to `return` early and leave the last commanded speed running — the firmware watchdog was the only thing stopping it, silently.
+- **No `.sheet` may clip its own content** (`max-height` + a scrolling `.body`). Adding the Buttons section pushed the gamepad dialog past its sheet and silently cut off the live-response canvas.
+- Watch for **flex children collapsing to zero height**: the hold-progress bar was present, styled, correctly coloured and 0 px tall until it got `flex:none`. Measure the render, do not just look at it.
+
 ## Rig commissioning (v0.13 — ADR-0020)
 
 - Reached from **Export 3D… → Measure…**, because that is where an operator is standing when they realise they do not know their steps/mm.

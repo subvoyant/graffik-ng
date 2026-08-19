@@ -55,6 +55,34 @@ if (!window.tc) {
   };
 }
 
+/* Browser-preview stub for the control policy (ADR-0021). Layout only — under
+   Electron preload bridges the real, tested values in and this is unreachable.
+   Kept in step with the core by the same rule as the timecode stub: never
+   extend it into a second implementation. */
+if (!window.controls) {
+  window.controls = {
+    ACTIONS: [
+      { id: "estop", label: "STOP ALL", motion: false, holdMs: 0, note: "fires the instant it is pressed, whatever else is happening" },
+      { id: "runPass", label: "Run pass", motion: true, holdMs: 600, note: "hold — this starts the rig moving" },
+      { id: "gotoStart", label: "Send to start", motion: true, holdMs: 600, note: "hold — this starts the rig moving" },
+      { id: "jogToggle", label: "Gamepad jog on/off", motion: false, holdMs: 0, note: "on press; turning jog OFF also zeroes every axis" },
+      { id: "markKey", label: "Capture keyframe (all axes)", motion: false, holdMs: 0, note: "on press; edits the move, not the rig" },
+    ],
+    STOP_ACTION_ID: "estop",
+    DEFAULT_BUTTON_BINDINGS: { estop: { index: null }, runPass: { index: null }, gotoStart: { index: null }, jogToggle: { index: null }, markKey: { index: null } },
+    unboundStopWarning: (b) => (b?.estop?.index === null || b?.estop?.index === undefined
+      ? "No STOP button is bound — the only e-stop is the one on screen. Bind a button before running anything that moves." : null),
+    duplicateButtonBindings: (b) => {
+      const m = new Map();
+      for (const [id, v] of Object.entries(b ?? {})) {
+        if (v?.index === null || v?.index === undefined) continue;
+        m.set(v.index, [...(m.get(v.index) ?? []), id]);
+      }
+      return [...m.entries()].filter(([, ids]) => ids.length > 1).map(([index, ids]) => ({ index, ids }));
+    },
+  };
+}
+
 if (!window.nmx) {
   const pos = [0, 0, 0], speeds = [0, 0, 0];
   setInterval(() => { for (let i = 0; i < 3; i++) pos[i] = Math.round(pos[i] + speeds[i] * 0.05); }, 50);
@@ -403,7 +431,10 @@ setInterval(async () => {
    fine control near centre), 3+ = very soft centre for delicate framing.      */
 const BIND_ORDER = ["slide", "pan", "tilt"];
 let padCfg = { bindings: { slide: { axisIndex: 0, invert: false }, pan: { axisIndex: 2, invert: false }, tilt: { axisIndex: 3, invert: true } },
+               buttons: structuredClone(window.controls.DEFAULT_BUTTON_BINDINGS),
                deadzone: 0.15, curve: 2, maxSpeedPct: 100 };
+/** Set while capturing a button or a stick, so a learn press cannot also fire. */
+let padLearning = null;
 
 function ballistics(raw, cfg) {
   const a = Math.abs(raw);
@@ -432,7 +463,20 @@ $("gamepad").onclick = () => {
   let beat = 0;
   padTimer = setInterval(() => {
     const pad = navigator.getGamepads?.().find((g) => g);
-    if (!pad || !connected) return;
+    /* A vanished controller USED to return early here, which left whatever jog
+       speed was last commanded still running. The firmware's joystick watchdog
+       would eventually catch it, but "eventually, by a timeout we have never
+       measured" is not how a moving camera should be stopped — so zero the axes
+       here and say so. Belt, and the firmware's braces. */
+    if (!pad) {
+      if (lastSent.some((v) => v !== 0)) {
+        stopGamepad();
+        status("⚠ Gamepad disappeared mid-jog — all axes stopped. Check the cable before jogging again.");
+        logPass("gamepad lost during jog — axes zeroed");
+      }
+      return;
+    }
+    if (!connected) return;
     $("gamepadName").textContent = pad.id.slice(0, 30);
     const max = Number($("speed").value);
     beat = (beat + 1) % 4;                       // heartbeat keeps the firmware watchdog fed
@@ -443,6 +487,85 @@ $("gamepad").onclick = () => {
   }, 66);
 };
 window.addEventListener("gamepadconnected", (e) => { $("gamepadName").textContent = e.gamepad.id.slice(0, 30); });
+
+/* ------------------------------------------------------------------
+   Physical buttons (ADR-0021)
+
+   This loop is SEPARATE from the jog loop above and runs whenever a
+   controller is present, because the moment you most want a physical stop
+   is during a programmed pass — which is exactly when gamepad jog is off.
+   Tying the e-stop to the jog toggle would have made it useless precisely
+   when it mattered.
+   ------------------------------------------------------------------ */
+
+/* The action list and its hold times come from the CORE, bridged by preload
+   (ADR-0021). Not copied: "starting requires deliberation" having two homes is
+   how it would quietly stop being true in one of them. */
+const CONTROL_ACTIONS = window.controls.ACTIONS;
+const STOP_ACTION_ID = window.controls.STOP_ACTION_ID;
+
+/** Only the state machine lives here — the POLICY it enforces is bridged in. */
+class HoldLatch {
+  constructor(holdMs) { this.holdMs = holdMs; this.downAt = null; this.fired = false; }
+  update(pressed, now) {
+    if (!pressed) { this.downAt = null; this.fired = false; return false; }
+    if (this.downAt === null) { this.downAt = now; this.fired = false; }
+    if (this.fired) return false;
+    if (now - this.downAt >= this.holdMs) { this.fired = true; return true; }
+    return false;
+  }
+  progress(now) {
+    if (this.downAt === null || this.holdMs <= 0) return 0;
+    return this.fired ? 1 : Math.max(0, Math.min(1, (now - this.downAt) / this.holdMs));
+  }
+  reset() { this.downAt = null; this.fired = false; }
+}
+
+const latches = Object.fromEntries(CONTROL_ACTIONS.map((a) => [a.id, new HoldLatch(a.holdMs)]));
+let padHadController = false;
+
+const CONTROL_RUN = {
+  estop: async () => {
+    await window.nmx.stopAll();
+    stopGamepad();
+    status("STOP ALL — from the controller. Everything halted.");
+    logPass("STOP ALL (physical button)");
+  },
+  runPass: () => $("tlRun").click(),
+  gotoStart: () => $("tlGotoStart").click(),
+  jogToggle: () => $("gamepad").click(),
+  /* Jog to a position, press the button, every axis gets a key at the playhead.
+     That is the jog-to-keyframe idiom the editor was built around, and it is
+     the one editing action worth having on a controller — you are at the rig,
+     not at the laptop. */
+  markKey: async () => { for (let i = 0; i < AXES.length; i++) await capture(i); },
+};
+
+setInterval(() => {
+  const pad = navigator.getGamepads?.().find((g) => g);
+  if (!pad) {
+    if (padHadController) {
+      padHadController = false;
+      for (const l of Object.values(latches)) l.reset();
+      $("padHold").style.width = "0%";
+    }
+    return;
+  }
+  padHadController = true;
+  if (padLearning) return;                    // a learn capture must not fire actions
+  const now = performance.now();
+  let holdShown = 0;
+  for (const a of CONTROL_ACTIONS) {
+    const idx = padCfg.buttons?.[a.id]?.index;
+    if (idx === null || idx === undefined) continue;
+    const pressed = Boolean(pad.buttons[idx]?.pressed);
+    holdShown = Math.max(holdShown, latches[a.id].progress(now));
+    if (!latches[a.id].update(pressed, now)) continue;
+    try { CONTROL_RUN[a.id]?.(); } catch (e) { status(`${a.label} failed: ${e.message}`); }
+  }
+  /* A hold you cannot see is a hold people give up on halfway. */
+  $("padHold").style.width = `${Math.round(holdShown * 100)}%`;
+}, 40);
 
 /* ---- gamepad settings modal ---- */
 let learning = null;                       // {which} while capturing a stick
@@ -459,10 +582,46 @@ function renderBinds() {
   });
   $("binds").querySelectorAll("[data-learn]").forEach((b) => b.onclick = () => {
     learning = { which: b.dataset.learn, base: null };
+    padLearning = learning;      // a learn press must never also fire an action
     b.textContent = "move it…"; b.classList.add("toggled");
     $("padStatus").textContent = `Move the control you want for ${learning.which.toUpperCase()}.`;
   });
 }
+function renderButtonBinds() {
+  padCfg.buttons = { ...structuredClone(window.controls.DEFAULT_BUTTON_BINDINGS), ...(padCfg.buttons ?? {}) };
+  $("btnBinds").innerHTML = CONTROL_ACTIONS.map((a) => {
+    const idx = padCfg.buttons[a.id]?.index;
+    const stop = a.id === STOP_ACTION_ID;
+    return `
+      <div class="btnrow">
+        <span style="font-size:11px;color:${stop ? "var(--danger-hi)" : "var(--ink)"}">${a.label}</span>
+        <span style="font-family:var(--mono);font-size:10.5px;color:var(--ink-dim)">${idx === null || idx === undefined ? "—" : `button ${idx}`}</span>
+        <span style="font-size:10px;color:var(--ink-faint)">${a.holdMs ? `hold ${(a.holdMs / 1000).toFixed(1)}s` : "instant"}</span>
+        <button data-btnlearn="${a.id}">${idx === null || idx === undefined ? "bind…" : "rebind…"}</button>
+      </div>`;
+  }).join("");
+  $("btnBinds").querySelectorAll("[data-btnlearn]").forEach((b) => b.onclick = () => {
+    const id = b.dataset.btnlearn;
+    /* Clearing first means a second click on a bound row is "unbind", which is
+       the only way to remove one without a separate control. */
+    if (padCfg.buttons[id].index !== null && padCfg.buttons[id].index !== undefined) {
+      padCfg.buttons[id] = { index: null }; savePad(); renderButtonBinds();
+      return $("padStatus").textContent = `${id} unbound — press bind… again to set a new button.`;
+    }
+    padLearning = { kind: "button", id };
+    b.textContent = "press it…"; b.classList.add("toggled");
+    $("padStatus").textContent = `Press the button you want for ${CONTROL_ACTIONS.find((a) => a.id === id).label}.`;
+  });
+
+  const warn = window.controls.unboundStopWarning(padCfg.buttons);
+  const dupes = window.controls.duplicateButtonBindings(padCfg.buttons);
+  const msgs = [];
+  if (warn) msgs.push(warn);
+  for (const d of dupes) msgs.push(`Button ${d.index} is bound to ${d.ids.join(" and ")} — one button, one action.`);
+  $("padStopWarn").style.display = msgs.length ? "" : "none";
+  $("padStopWarn").innerHTML = msgs.join("<br>");
+}
+
 function savePad() { window.nmx.setPrefs({ gamepad: padCfg }); }
 
 const padViz = $("padViz"), pvx = padViz.getContext("2d");
@@ -489,7 +648,19 @@ setInterval(() => {
   if (!$("padModal").classList.contains("open")) return;
   const pad = navigator.getGamepads?.().find((g) => g);
   if (!pad) { $("padStatus").textContent = "No controller detected — connect one and press any button."; return drawPadViz(null); }
-  if (!learning) $("padStatus").textContent = `${pad.id.slice(0, 40)} · ${pad.axes.length} axes`;
+  if (!padLearning) {
+    $("padStatus").textContent = `${pad.id.slice(0, 40)} · ${pad.axes.length} axes · ${pad.buttons.length} buttons`;
+  }
+  if (padLearning?.kind === "button") {
+    const i = pad.buttons.findIndex((b) => b.pressed);
+    if (i >= 0) {
+      const id = padLearning.id;
+      padCfg.buttons[id] = { index: i };
+      $("padStatus").textContent = `${CONTROL_ACTIONS.find((a) => a.id === id).label} → button ${i}`;
+      padLearning = null; savePad(); renderButtonBinds();
+    }
+    return drawPadViz(pad.axes.slice(0, 3));
+  }
   if (learning) {
     if (!learning.base) learning.base = [...pad.axes];
     let best = -1, bestD = 0.35;
@@ -497,13 +668,13 @@ setInterval(() => {
     if (best >= 0) {
       padCfg.bindings[learning.which].axisIndex = best;
       $("padStatus").textContent = `${learning.which.toUpperCase()} → axis ${best}`;
-      learning = null; savePad(); renderBinds();
+      learning = null; padLearning = null; savePad(); renderBinds();
     }
   }
   drawPadViz(BIND_ORDER.map((w) => readPadAxis(pad, w)));
 }, 80);
 
-$("gamepadCfg").onclick = () => { renderBinds(); syncPadInputs(); $("padModal").classList.add("open"); };
+$("gamepadCfg").onclick = () => { renderBinds(); renderButtonBinds(); syncPadInputs(); $("padModal").classList.add("open"); };
 function syncPadInputs() {
   $("padDead").value = Math.round(padCfg.deadzone * 100);
   $("padCurve").value = padCfg.curve;

@@ -25,3 +25,4 @@ Immutable decision records. Accepted = in force. Supersede, never edit. See ADR-
 | [0018](0018-lens-device-protocol-v2.md) | GRAFFIK-TRIG v2: decimated lens curves, mandatory calibration, schema v4 | Accepted (unverified against a motor) |
 | [0019](0019-lens-library.md) | Lens library: marks belong to a lens, merged by id, never replaced | Accepted |
 | [0020](0020-commissioning-measured-not-guessed.md) | Commissioning: the app measures the rig — spans, spread, and named suspects | Accepted |
+| [0021](0021-physical-controls-stop-is-instant.md) | Physical controls: stopping is instant, starting is a hold | Accepted (unverified against a controller) |

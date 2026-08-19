@@ -41,6 +41,22 @@ contextBridge.exposeInMainWorld("tc", {
   newFilm: (name, durationFrames, tb) => core.newFilm(name, durationFrames, tb),
 });
 
+/**
+ * The physical-control policy (ADR-0021), bridged rather than copied.
+ *
+ * Same reasoning as the timecode bridge above: the hold times and the
+ * stop-is-instant rule are the load-bearing part, the button loop reads them
+ * every 40 ms, and a second copy in the renderer would be a second place for
+ * "starting requires deliberation" to quietly stop being true.
+ */
+contextBridge.exposeInMainWorld("controls", {
+  ACTIONS: core.CONTROL_ACTIONS.map((a) => ({ ...a })),
+  STOP_ACTION_ID: core.STOP_ACTION_ID,
+  DEFAULT_BUTTON_BINDINGS: structuredClone(core.DEFAULT_BUTTON_BINDINGS),
+  unboundStopWarning: (b) => core.unboundStopWarning(b),
+  duplicateButtonBindings: (b) => core.duplicateButtonBindings(b),
+});
+
 contextBridge.exposeInMainWorld("nmx", {
   // connection
   listPorts: () => ipcRenderer.invoke("nmx:list-ports"),

@@ -1,6 +1,6 @@
 {
   "name": "@graffik-ng/nmx-cli",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "Headless CLI for the NMX motion controller: list ports, query firmware, run saved .graffik moves, e-stop. Scripted shoots and hardware smoke tests.",
   "license": "MIT",
   "type": "module",

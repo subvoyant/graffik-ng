@@ -184,6 +184,13 @@ input[type=text] { font-size: 11.5px; }
   color: var(--ink-faint); border-bottom: 1px solid var(--line); padding-bottom: 4px; margin-top: 4px;
 }
 #lensMarkRows { max-height: 190px; overflow-y: auto; }
+/* Every sheet, not just this one: a dialog that silently clips its last
+   section is a dialog whose last section does not exist as far as the
+   operator is concerned. Found when the gamepad modal grew a Buttons
+   section and quietly cut off its live-response canvas. */
+.sheet { max-height: calc(100vh - 72px); display: flex; flex-direction: column; }
+.sheet > .body { overflow-y: auto; }
+.btnrow { display: grid; grid-template-columns: 1fr 78px 70px 88px; gap: 6px; align-items: center; margin: 3px 0; }
 .bind { display: grid; grid-template-columns: 1fr 92px 58px 26px 26px; gap: 5px; align-items: center; margin: 3px 0; }
 .bind input, .bind select { font-size: 10.5px; padding: 3px 5px; }
 .chip.tier2 { color: var(--ok); border-color: #2c4a3e; }
@@ -491,6 +498,24 @@ input[type=text] { font-size: 11.5px; }
         <span>Axis</span><span>Control</span><span>Invert</span><span></span>
       </div>
       <div id="binds"></div>
+
+      <div class="sect">Buttons</div>
+      <div id="padStopWarn" style="font-size:10.5px;color:var(--danger-hi);display:none"></div>
+      <div class="btnrow" style="color:var(--ink-faint);font-size:10px">
+        <span>Action</span><span>Button</span><span>When</span><span></span>
+      </div>
+      <div id="btnBinds"></div>
+      <div style="font-size:10px;color:var(--ink-faint)">
+        <b>Stopping is instant. Starting is a hold.</b> The STOP button fires the moment it is pressed,
+        whatever else is happening and whether or not gamepad jog is on. Anything that puts the rig in
+        motion has to be held for 0.6 s, so a knocked controller cannot start a move.
+      </div>
+      <!-- flex:none matters. The body is a flex column and now scrolls, so a
+           3px child with the default flex-shrink collapses to ZERO height —
+           present, styled, and invisible. Caught by measuring the render. -->
+      <div style="flex:none;height:4px;background:var(--bg-field);border-radius:2px;overflow:hidden">
+        <i id="padHold" style="display:block;height:100%;width:0%;background:var(--warn);transition:width 40ms linear"></i>
+      </div>
 
       <div class="sect">Ballistics</div>
       <div class="row">

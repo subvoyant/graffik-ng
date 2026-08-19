@@ -1,6 +1,6 @@
 # Digest: @graffik-ng/nmx-protocol
 
-**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.13) · 290 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
+**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.14) · 307 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
 
 ## packet.ts — codec
 
@@ -91,6 +91,14 @@ Namespaces returning `Packet`: `general` (sub 0), `motors` (1–3, `Motor = 1|2|
 - `mergeLensLibrary(existing, incoming)` → `{merged, added, updated, rejected}`. **A malformed entry does NOT sink the import** — the survivors go in and the casualties are named. Deliberately the opposite of a move file: a move is one indivisible thing, a library is a collection. `merged` is always sorted by kind then name so a picker is readable.
 - `validateLensLibraryEntry` delegates to `validateLensMap` — an entry that would be rejected as a map cannot be used, and finding that out at apply time is too late.
 - `lensEntryToMap` / `lensMapToEntry` **copy** their marks; mutating one must not reach the other.
+
+## controls.ts — physical control policy (ADR-0021)
+
+- **The rule: stopping is instant and always available; starting requires deliberation.** `CONTROL_ACTIONS` carries every action's `holdMs`; the stop action is always 0 and every `motion: true` action is always a hold. A test walks the list and fails if either ever stops being true.
+- `HoldLatch(holdMs)` takes **injected time** (same discipline as `CueScheduler`) and fires **once per press** — a held button is one instruction, and a Run pass that retriggered every tick would restart the move the instant it finished. `progress()` exists so a hold is visible while it happens.
+- Deliberation is a **hold, not a double-press**: a bouncing button can fake a double-press, nothing fakes 600 ms of contact.
+- `DEFAULT_BUTTON_BINDINGS` binds **nothing** — a guessed e-stop is worse than none because it would be believed. `unboundStopWarning` makes the absence loud; `duplicateButtonBindings` reports two actions on one button as the ambiguity it is.
+- Bridged into the renderer by preload (`window.controls`), never copied — the same reasoning as the timecode bridge.
 
 ## commission.ts — measuring the rig (ADR-0020)
 
