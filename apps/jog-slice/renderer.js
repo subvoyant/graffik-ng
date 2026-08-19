@@ -937,7 +937,9 @@ async function endRecording(endedBy) {
   if (!recordingId) return;
   recordingId = null;
   try {
-    const r = await window.nmx.traceEnd(endedBy);
+    /* We hand over what WE think the move is, so the device's denominator can be
+       compared with it rather than taken on faith (ADR-0029). */
+    const r = await window.nmx.traceEnd(endedBy, TC.framesToMsExact(film.durationFrames, film.timebase));
     if (!r) return;
     const c = r.coverage;
     logPass(
@@ -950,6 +952,7 @@ async function endRecording(endedBy) {
     if (c.wentBackwards) logPass(`${r.id} — the controller reported percent going BACKWARDS at least once`);
     if (c.suspect) logPass(`${r.id} — ${c.suspect} sample(s) taken mid send-to and set aside`);
     if (r.dropped) logPass(`${r.dropped} older recording(s) dropped — only the last ${traceIndex.cap || 20} are kept`);
+    for (const line of r.timing ?? []) logPass(`${r.id} — ${line}`);
     await refreshTraces();
     if (endedBy === "complete") await addOverlay(r.id);
   } catch { /* the pass mattered; the bookkeeping did not */ }

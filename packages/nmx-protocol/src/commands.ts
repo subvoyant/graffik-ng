@@ -91,8 +91,12 @@ export const general = {
   setDeviceAddress: (addr: number) => gen(8, be.u8(addr)),
   /** cmd 10 — send all motors to home position. */
   sendAllHome: () => gen(10),
-  /** cmd 11 — global max step rate (steps/s). */
-  setMaxStepRate: (stepsPerSec: number) => gen(11, be.u16(stepsPerSec)),
+  /* cmd 11 was "max step rate" and is **deprecated in firmware 0.70** — the very
+     version this app gates on. `serMain` has no case 11 (the firmware left a
+     block comment where the case used to be), and the default branch does not
+     reply at all, so sending it would have stalled the one-command-in-flight
+     queue until timeout. Removed in v0.23; found by the vocabulary audit
+     (ADR-0029), not by anything calling it. Per-motor max speed is motor cmd 7. */
   /** cmd 14 — joystick watchdog: kill motors if host goes silent. Keep ON while jogging. */
   setJoystickWatchdog: (enabled: boolean) => gen(14, bool(enabled)),
   /** cmd 20 — max program run time, ms. */
@@ -141,6 +145,16 @@ export const general = {
   queryCurrent: () => gen(108),
   /** query 118 — the plan type currently latched on the device. */
   queryPlanType: () => gen(118),
+  /**
+   * query 125 — the classic program's own total run time, ms (`totalProgramTime()`
+   * = lead-in + travel + lead-out of the longest enabled motor).
+   *
+   * This is the **planned** total, not elapsed — query 102 is elapsed. Having
+   * both lets a recorded pass check the firmware's own arithmetic: on CONT_VID
+   * the reported percent should be elapsed/total (ADR-0028), and if it is not,
+   * something is dividing by a number we do not know about.
+   */
+  queryProgramTotalTime: () => gen(125),
   /**
    * query 123 — program progress %.
    *

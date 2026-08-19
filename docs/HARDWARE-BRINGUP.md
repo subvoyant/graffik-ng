@@ -95,6 +95,11 @@ that repeat beautifully unloaded can drop steps under mass.
   the endpoint; the app is the only measurement of the middle. If the tape says
   0.3 mm and the app says the carriage was 400 steps out at 60%, **both are true**
   and something interesting happens mid-move.
+- **Read the device-timing line under each pass first** (ADR-0029). If it says the
+  device divided percent by more milliseconds than the move you uploaded, stop and
+  fix that before trusting any comparison above it — every number joined on percent
+  is scaled by the same ratio. This catches the plan-type problem *and* anything
+  else that inflates the denominator, including a start delay nobody set on purpose.
 - **Check the plan type line in the bring-up report** (ADR-0028). It should read
   *continuous video*. If it says anything else, the percent the playhead and every
   comparison are built on has been divided by the wrong thing, and the numbers

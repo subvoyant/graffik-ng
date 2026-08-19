@@ -49,6 +49,8 @@ export interface BringUpState {
       samples: number; usable: number; suspect: number; failed: number;
       fromPercent: number; toPercent: number; maxGapPct: number;
       medianCostMs: number; wentBackwards: boolean;
+      /** From `timingCheck` — what the device's own numbers say about this pass. */
+      timing?: string[];
     }[];
     comparisons?: { title: string; result: CompareResult }[];
   };
@@ -191,6 +193,9 @@ export function bringUpReport(s: BringUpState): string {
         `${Math.round(t.maxGapPct)}%, ${Math.round(t.medianCostMs)} ms per sample` +
         (flags.length ? ` — ${flags.join("; ")}` : ""),
       );
+      /* Indented under its pass: this is a statement about THAT pass's percent,
+         and floating it loose would read as a claim about the session. */
+      for (const line of t.timing ?? []) L.push(`  - ${line}`);
     }
     /* The sample cost is here because it is the number that decides whether the
        500 ms poll can be tightened. It cannot be reasoned about off the rig. */

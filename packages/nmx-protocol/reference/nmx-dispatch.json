@@ -1,0 +1,1066 @@
+{
+ "_": [
+  "FACTS extracted from the NMX firmware dispatch. No code is copied (ADR-0003);",
+  "this is a table of command numbers, the firmware's own one-line comment, and a",
+  "payload-width hint inferred from which Node.nto* reader the case body uses.",
+  "",
+  "Source: DynamicPerception/nanoMoCo_Firmware @ master (last commit Nov 2018),",
+  "  Firmware/Motion_Engine/OM_Serial_Com_Client.ino  — serMain / serMotor /",
+  "  serCamera / serKeyFrame, one entry per `case N:` reached by that handler.",
+  "  Broadcast codes come from OMLibraries/OMMoCoBus/OMMoCoDefs.h (named enum,",
+  "  not numeric cases, so they are transcribed rather than parsed).",
+  "",
+  "Regenerate with scripts/audit-vocabulary.mjs --extract <path-to-firmware-clone>.",
+  "A payload of null means the case body reads no argument, or reads one in a way",
+  "the extractor cannot classify — it is a hint, never a contract."
+ ],
+ "extractedAt": "2026-08-19",
+ "firmwareSerialVersion": 70,
+ "groups": {
+  "general": [
+   {
+    "command": 2,
+    "note": "Command 2 starts program",
+    "payload": null
+   },
+   {
+    "command": 3,
+    "note": "Command 3 pauses program",
+    "payload": null
+   },
+   {
+    "command": 4,
+    "note": "Command 4 stops program",
+    "payload": null
+   },
+   {
+    "command": 5,
+    "note": "Command 5 enables or disables the debug LED",
+    "payload": null
+   },
+   {
+    "command": 6,
+    "note": "Command 6 sets the master timing",
+    "payload": "u8"
+   },
+   {
+    "command": 7,
+    "note": "Command 7 sets the name of the device",
+    "payload": null
+   },
+   {
+    "command": 8,
+    "note": "Command 8 sets new address for device",
+    "payload": "u8"
+   },
+   {
+    "command": 9,
+    "note": "Command 9 sets a common line for step pulsing",
+    "payload": "u8"
+   },
+   {
+    "command": 10,
+    "note": "Command 10 send all motors home",
+    "payload": null
+   },
+   {
+    "command": 12,
+    "note": "Command 12 sets limit switch mode (0 - enable on RISING edge, 1 - enable on FALLING edge, 2 - enable on CHANGE edge)",
+    "payload": "u8"
+   },
+   {
+    "command": 13,
+    "note": "Command 13 sets aux I/O mode",
+    "payload": "u8"
+   },
+   {
+    "command": 14,
+    "note": "Command 14 sets joystick watchdog flag",
+    "payload": "u8"
+   },
+   {
+    "command": 15,
+    "note": "Command 15 Set Alt Output Before Shot Delay",
+    "payload": "u16"
+   },
+   {
+    "command": 16,
+    "note": "Command 16 Set Alt Output After Shot Delay",
+    "payload": "u16"
+   },
+   {
+    "command": 17,
+    "note": "Command 17 Set Alt Output Before Shot Time",
+    "payload": "u16"
+   },
+   {
+    "command": 18,
+    "note": "Command 18 Set Alt Output After Shot Time",
+    "payload": "u16"
+   },
+   {
+    "command": 19,
+    "note": "Command 19 Set Alt Output Trigger Level",
+    "payload": "u8"
+   },
+   {
+    "command": 20,
+    "note": "Command 20 sets the max run time",
+    "payload": "u32"
+   },
+   {
+    "command": 21,
+    "note": "Command 21 set start time delay (input is in miliseconds)",
+    "payload": "u32"
+   },
+   {
+    "command": 22,
+    "note": "Command 22 sets motors' program move mode",
+    "payload": "u8"
+   },
+   {
+    "command": 23,
+    "note": "This is to avoid incorrect commands due to corrupt communications causing runaway motors or controller lockup.",
+    "payload": "u8"
+   },
+   {
+    "command": 24,
+    "note": "Command 24 sets the motors' ping_pong_mode, if enabled it causes the motors to bounce back and forth",
+    "payload": "u8"
+   },
+   {
+    "command": 25,
+    "note": "Command 25 sends all motors to their start positions.",
+    "payload": null
+   },
+   {
+    "command": 26,
+    "note": "Command 26 set program start point here",
+    "payload": null
+   },
+   {
+    "command": 27,
+    "note": "Command 27 set program stop point here",
+    "payload": null
+   },
+   {
+    "command": 28,
+    "note": "Command 28 set frames/second flag",
+    "payload": "u8"
+   },
+   {
+    "command": 29,
+    "note": "Command 29 swaps all motors' start and stop positions",
+    "payload": null
+   },
+   {
+    "command": 30,
+    "note": "Command 30 sets whether the current position should be saved after a power cycle",
+    "payload": "u8"
+   },
+   {
+    "command": 31,
+    "note": "Command 31 sets whether the start and stop points should be saved after a power cycle",
+    "payload": "u8"
+   },
+   {
+    "command": 32,
+    "note": "Command 32 sets whether the end position should be saved after a power cycle",
+    "payload": "u8"
+   },
+   {
+    "command": 33,
+    "note": "Command 33 sets the number of controllers running concurrently",
+    "payload": "u8"
+   },
+   {
+    "command": 50,
+    "note": "Command 50 sets Graffik Mode on or off",
+    "payload": "u8"
+   },
+   {
+    "command": 51,
+    "note": "Command 51 sets App Mode on or off",
+    "payload": "u8"
+   },
+   {
+    "command": 100,
+    "note": "Command 100 read firmware version",
+    "payload": null
+   },
+   {
+    "command": 101,
+    "note": "Command 101 reads run status",
+    "payload": null
+   },
+   {
+    "command": 102,
+    "note": "Command 102 reads current run time. If the program has completed, it will return the run time when the program stopped.",
+    "payload": null
+   },
+   {
+    "command": 103,
+    "note": "Command 103 is camera(s) currently exposing?",
+    "payload": null
+   },
+   {
+    "command": 104,
+    "note": "Command 104 reads master timing value",
+    "payload": null
+   },
+   {
+    "command": 105,
+    "note": "Command 105 reads device name",
+    "payload": null
+   },
+   {
+    "command": 107,
+    "note": "Command 107 reads voltage in",
+    "payload": null
+   },
+   {
+    "command": 108,
+    "note": "Command 108 reads current to the motors",
+    "payload": null
+   },
+   {
+    "command": 109,
+    "note": "Command 109 reads limit switch input edge setting",
+    "payload": null
+   },
+   {
+    "command": 110,
+    "note": "Command 110 reads limit switch mode",
+    "payload": null
+   },
+   {
+    "command": 111,
+    "note": "Command 111 reads limit switch status high or low (1 or 0)",
+    "payload": null
+   },
+   {
+    "command": 112,
+    "note": "Command 112 reads Alt Output Before Shot Delay Time",
+    "payload": null
+   },
+   {
+    "command": 113,
+    "note": "Command 113 reads Alt Output After Shot Delay Time",
+    "payload": null
+   },
+   {
+    "command": 114,
+    "note": "Command 114 reads Alt Output Before Shot Time",
+    "payload": null
+   },
+   {
+    "command": 115,
+    "note": "Command 115 reads Alt Output After Shot Time",
+    "payload": null
+   },
+   {
+    "command": 116,
+    "note": "Command 116 reads Alt Output Trigger Level",
+    "payload": null
+   },
+   {
+    "command": 117,
+    "note": "Command 117 reads start time delay (miliseconds)",
+    "payload": null
+   },
+   {
+    "command": 118,
+    "note": "Command 118 reads motors' continuous mode setting",
+    "payload": null
+   },
+   {
+    "command": 119,
+    "note": "Command 119 reads whether the controller has been powercycled since last query",
+    "payload": null
+   },
+   {
+    "command": 120,
+    "note": "Command 120 reads joystick mode setting",
+    "payload": null
+   },
+   {
+    "command": 121,
+    "note": "Command 121 reads the ping-pong flag setting",
+    "payload": null
+   },
+   {
+    "command": 122,
+    "note": "Command 122 reads the joystick watchdog mode status",
+    "payload": null
+   },
+   {
+    "command": 123,
+    "note": "Command 123 reports the percent completion of the current program",
+    "payload": null
+   },
+   {
+    "command": 124,
+    "note": "Command 124 returns a byte where the three least significant bits indicate each motor's attachment state",
+    "payload": null
+   },
+   {
+    "command": 125,
+    "note": "Command 125 returns the total run time of the current program in milliseconds",
+    "payload": null
+   },
+   {
+    "command": 126,
+    "note": "Command 126 returns whether the current program has completed",
+    "payload": null
+   },
+   {
+    "command": 127,
+    "note": "Command 127 get frames/second flag",
+    "payload": null
+   },
+   {
+    "command": 128,
+    "note": "Command 128 checks whether any motor is currently running",
+    "payload": null
+   },
+   {
+    "command": 129,
+    "note": "Command 129 checks whether all the motors can achieve the required speed to complete program based on currently set parameters",
+    "payload": null
+   },
+   {
+    "command": 130,
+    "note": "Command 130 checks the sleep state of all motors",
+    "payload": null
+   },
+   {
+    "command": 131,
+    "note": "Command 131 returns whether the current position should be saved after a power cycle",
+    "payload": null
+   },
+   {
+    "command": 132,
+    "note": "Command 132 returns whether the start and stop points should be saved after a power cycle",
+    "payload": null
+   },
+   {
+    "command": 133,
+    "note": "Command 133 returns whether the end position should be saved after a power cycle",
+    "payload": null
+   },
+   {
+    "command": 134,
+    "note": "Command 134 returns the number of controllers running in concurrent mode",
+    "payload": "u8"
+   },
+   {
+    "command": 140,
+    "note": "Command 140 returns the full run status as a single byte. Prefer this command over 0.101 and",
+    "payload": null
+   },
+   {
+    "command": 150,
+    "note": "Command 150 returns whether the controller is in Graffik Mode",
+    "payload": null
+   },
+   {
+    "command": 200,
+    "note": "Command 200 returns the NMX's available memory in bytes",
+    "payload": null
+   },
+   {
+    "command": 252,
+    "note": "Command 252 sets the MoCoBus debug enable state",
+    "payload": "u8"
+   },
+   {
+    "command": 253,
+    "note": "Command 253 sets the USB debug enable state",
+    "payload": "u8"
+   },
+   {
+    "command": 254,
+    "note": "Command 254 sets the debug reporting state",
+    "payload": "u8"
+   },
+   {
+    "command": 255,
+    "note": "Command 255 Is a self diagnostic command for checking basic functionality of the controller",
+    "payload": null
+   }
+  ],
+  "motor": [
+   {
+    "command": 2,
+    "note": "Command 2 set the sleep mode of the motor",
+    "payload": "u8"
+   },
+   {
+    "command": 3,
+    "note": "Command 3 set motor enable",
+    "payload": "u8"
+   },
+   {
+    "command": 4,
+    "note": "Command 4 stops motor now",
+    "payload": null
+   },
+   {
+    "command": 5,
+    "note": "Command 5 set motor's backlash amount",
+    "payload": "u16"
+   },
+   {
+    "command": 6,
+    "note": "Command 6 set the microstep for the motor",
+    "payload": "u8"
+   },
+   {
+    "command": 7,
+    "note": "Command 7 set the max step speed of the motor",
+    "payload": "u16"
+   },
+   {
+    "command": 8,
+    "note": "Command 8 set motor direction",
+    "payload": "u8"
+   },
+   {
+    "command": 9,
+    "note": "Command 9 set motor's home limit",
+    "payload": null
+   },
+   {
+    "command": 10,
+    "note": "Command 10 set motor's end limit here",
+    "payload": null
+   },
+   {
+    "command": 11,
+    "note": "Command 11 send motor to home limit",
+    "payload": null
+   },
+   {
+    "command": 12,
+    "note": "Command 12 send motor to end limit",
+    "payload": null
+   },
+   {
+    "command": 13,
+    "note": "Command 13 set motor's continous speed",
+    "payload": "f32"
+   },
+   {
+    "command": 14,
+    "note": "Command 14 sets the acceleration for the motor while in continuous motion",
+    "payload": "f32"
+   },
+   {
+    "command": 15,
+    "note": "Command 15 move motor simple",
+    "payload": "u32"
+   },
+   {
+    "command": 16,
+    "note": "Command 16 set program start point",
+    "payload": "i32"
+   },
+   {
+    "command": 17,
+    "note": "Command 17 set program stop point",
+    "payload": "i32"
+   },
+   {
+    "command": 18,
+    "note": "Command 18 set motor's easing mode",
+    "payload": "u8"
+   },
+   {
+    "command": 19,
+    "note": "",
+    "payload": "u32"
+   },
+   {
+    "command": 20,
+    "note": "Command 20 set shots (SMS) / motor travel time (cont.)",
+    "payload": "u32"
+   },
+   {
+    "command": 21,
+    "note": "Command 21 set program acceleration period",
+    "payload": "u32"
+   },
+   {
+    "command": 22,
+    "note": "Command 22 set program deceleration period",
+    "payload": "u32"
+   },
+   {
+    "command": 23,
+    "note": "",
+    "payload": null
+   },
+   {
+    "command": 24,
+    "note": "",
+    "payload": null
+   },
+   {
+    "command": 25,
+    "note": "Command 25 sets the motor lead-out",
+    "payload": "u32"
+   },
+   {
+    "command": 26,
+    "note": "Command 26 is not yet allocated",
+    "payload": null
+   },
+   {
+    "command": 27,
+    "note": "Command 27 reset limits and program positions",
+    "payload": null
+   },
+   {
+    "command": 28,
+    "note": "The command will respond with the value that is selected or with 0 if a program is in progress or the selected motor is running.",
+    "payload": null
+   },
+   {
+    "command": 29,
+    "note": "Command 29 sets the motor's start position to its current position",
+    "payload": null
+   },
+   {
+    "command": 30,
+    "note": "Command 30 sets the motor's stop position to its current position",
+    "payload": null
+   },
+   {
+    "command": 31,
+    "note": "Command 31 sends the motor to the specified position",
+    "payload": "i32"
+   },
+   {
+    "command": 32,
+    "note": "Command 32 sends the motor the motor's current position to a specified step count",
+    "payload": "i32"
+   },
+   {
+    "command": 33,
+    "note": "Command 33 sets the motor's end position to a specified location",
+    "payload": "i32"
+   },
+   {
+    "command": 40,
+    "note": "Command 40 sets the unit code for this motor. Final output units are not used in firmware, so",
+    "payload": null
+   },
+   {
+    "command": 41,
+    "note": "Command 41 sets the gearbox ratio for this motor.",
+    "payload": "f32"
+   },
+   {
+    "command": 42,
+    "note": "Command 42 sets the platform ratio for this motor.",
+    "payload": "f32"
+   },
+   {
+    "command": 50,
+    "note": "Command 50 sets the stop-motion flag",
+    "payload": "u8"
+   },
+   {
+    "command": 51,
+    "note": "Command 51 steps forward one planned cycle for SMS",
+    "payload": null
+   },
+   {
+    "command": 52,
+    "note": "Command 52 steps back one sms planed cycle",
+    "payload": null
+   },
+   {
+    "command": 100,
+    "note": "Command 100 reads motor enable status",
+    "payload": null
+   },
+   {
+    "command": 101,
+    "note": "Command 101 reads the backlash amount for the motor",
+    "payload": null
+   },
+   {
+    "command": 102,
+    "note": "Command 102 reads the microstep setting of the motor",
+    "payload": null
+   },
+   {
+    "command": 103,
+    "note": "Command 103 reads motor's direction",
+    "payload": null
+   },
+   {
+    "command": 104,
+    "note": "Command 104 reads max step speed of the motor",
+    "payload": null
+   },
+   {
+    "command": 105,
+    "note": "Command 105 reads end limit position",
+    "payload": null
+   },
+   {
+    "command": 106,
+    "note": "Command 106 reads the motor's current position (steps from home limit)",
+    "payload": null
+   },
+   {
+    "command": 107,
+    "note": "Command 107 reads whether the motor is currently running",
+    "payload": null
+   },
+   {
+    "command": 108,
+    "note": "Command 108 reads the continuous speed for the motor",
+    "payload": null
+   },
+   {
+    "command": 109,
+    "note": "Command 109 reads the accel/decel value continuous motion",
+    "payload": null
+   },
+   {
+    "command": 110,
+    "note": "Command 110 reads the easing algorithm",
+    "payload": null
+   },
+   {
+    "command": 111,
+    "note": "Command 111 reads the program start point position",
+    "payload": null
+   },
+   {
+    "command": 112,
+    "note": "Command 112 reads the program stop point position",
+    "payload": null
+   },
+   {
+    "command": 113,
+    "note": "Command 113 reads the program shots (SMS) / motor travel time (cont.)",
+    "payload": null
+   },
+   {
+    "command": 114,
+    "note": "Command 114 reads the motor's lead-in shots count",
+    "payload": null
+   },
+   {
+    "command": 115,
+    "note": "Command 115 reads the program acceleration length / time",
+    "payload": null
+   },
+   {
+    "command": 116,
+    "note": "Command 116 reads the program deceleration rate",
+    "payload": null
+   },
+   {
+    "command": 117,
+    "note": "Command 117 reads the program sleep state",
+    "payload": null
+   },
+   {
+    "command": 118,
+    "note": "Command 118 returns whether the specified motor can achieve the speed required by the currently set program parameters",
+    "payload": null
+   },
+   {
+    "command": 119,
+    "note": "Command 119 reads the motor's lead-out shots count",
+    "payload": null
+   },
+   {
+    "command": 120,
+    "note": "Command 120 returns whether the given motor can achieve the maximum required velocity for the currently set 2-point program",
+    "payload": null
+   },
+   {
+    "command": 121,
+    "note": "Command 121 returns the unit code for the given motor",
+    "payload": null
+   },
+   {
+    "command": 122,
+    "note": "Command 122 returns the gearbox ratio for the given motor",
+    "payload": null
+   },
+   {
+    "command": 123,
+    "note": "Command 123 returns the platform ratio for the given motor",
+    "payload": null
+   },
+   {
+    "command": 124,
+    "note": "Command 124 returns whether the motor is currently completing a \"send to\" command",
+    "payload": null
+   }
+  ],
+  "camera": [
+   {
+    "command": 2,
+    "note": "Command 2 set camera enable",
+    "payload": "u8"
+   },
+   {
+    "command": 3,
+    "note": "Command 3 expose camera now",
+    "payload": null
+   },
+   {
+    "command": 4,
+    "note": "Command 4 set camera's trigger time",
+    "payload": "u32"
+   },
+   {
+    "command": 5,
+    "note": "Command 5 set camera's focus time",
+    "payload": "u16"
+   },
+   {
+    "command": 6,
+    "note": "Command 6 set camera's max shots",
+    "payload": "u16"
+   },
+   {
+    "command": 7,
+    "note": "Command 7 set camera's exposure delay",
+    "payload": "u16"
+   },
+   {
+    "command": 8,
+    "note": "Command 8 set camera's focus w shutter",
+    "payload": "u8"
+   },
+   {
+    "command": 9,
+    "note": "Command 9 repeat cycles",
+    "payload": "u8"
+   },
+   {
+    "command": 10,
+    "note": "Command 10 set camera's interval",
+    "payload": "u32"
+   },
+   {
+    "command": 11,
+    "note": "Command 11 enables and disables the camera's test mode",
+    "payload": "u8"
+   },
+   {
+    "command": 12,
+    "note": "Command 12 sets camera keep-alive state",
+    "payload": "u8"
+   },
+   {
+    "command": 13,
+    "note": "Command 13 sets external intervalometer (slave) mode",
+    "payload": "u8"
+   },
+   {
+    "command": 100,
+    "note": "Command 100 gets camera's enable status",
+    "payload": null
+   },
+   {
+    "command": 101,
+    "note": "Command 101 gets if it's exposing now or not",
+    "payload": null
+   },
+   {
+    "command": 102,
+    "note": "Command 102 gets the camera's trigger time",
+    "payload": null
+   },
+   {
+    "command": 103,
+    "note": "Command 103 gets the camera's focus time",
+    "payload": null
+   },
+   {
+    "command": 104,
+    "note": "Command 104 gets the camera's max shots",
+    "payload": null
+   },
+   {
+    "command": 105,
+    "note": "Command 105 gets the camera's exposure delay",
+    "payload": null
+   },
+   {
+    "command": 106,
+    "note": "Command 106 gets the focus with shutter status",
+    "payload": null
+   },
+   {
+    "command": 107,
+    "note": "Command 107 gets the MUP state",
+    "payload": null
+   },
+   {
+    "command": 108,
+    "note": "Command 108 gets the camera's interval time",
+    "payload": null
+   },
+   {
+    "command": 109,
+    "note": "Command 109 gets the number of shots fired",
+    "payload": null
+   },
+   {
+    "command": 110,
+    "note": "Command 110 reports whether the camera is in test mode",
+    "payload": null
+   },
+   {
+    "command": 111,
+    "note": "Command 111 reports the keep-alive state",
+    "payload": null
+   },
+   {
+    "command": 112,
+    "note": "Command 112 reports the keep-alive state",
+    "payload": null
+   },
+   {
+    "command": 113,
+    "note": "It is used for timing commands sent to the NMX such that they will not cause movement-related errors",
+    "payload": null
+   }
+  ],
+  "keyframe": [
+   {
+    "command": 0,
+    "note": "",
+    "payload": null
+   },
+   {
+    "command": 1,
+    "note": "",
+    "payload": null
+   },
+   {
+    "command": 2,
+    "note": "",
+    "payload": null
+   },
+   {
+    "command": 3,
+    "note": "",
+    "payload": null
+   },
+   {
+    "command": 4,
+    "note": "",
+    "payload": null
+   },
+   {
+    "command": 5,
+    "note": "",
+    "payload": null
+   },
+   {
+    "command": 10,
+    "note": "Command 10 sets the current axis",
+    "payload": null
+   },
+   {
+    "command": 11,
+    "note": "Command 11 sets key frame count",
+    "payload": null
+   },
+   {
+    "command": 12,
+    "note": "Command 12 sets the next key frame abscissa (frames / milliseconds)",
+    "payload": "f32"
+   },
+   {
+    "command": 13,
+    "note": "Command 13 sets the next key frame motor position (steps)",
+    "payload": "f32"
+   },
+   {
+    "command": 14,
+    "note": "Command 14 sets the next key frame motor velocity (steps/frame or steps/millisecond)",
+    "payload": "f32"
+   },
+   {
+    "command": 15,
+    "note": "Command 15 sets the motor velocity update rate in ms that is used at run-time",
+    "payload": "u16"
+   },
+   {
+    "command": 16,
+    "note": "Command 16 sets the start/stop points for the current axis. End all KF transmissions with this command",
+    "payload": null
+   },
+   {
+    "command": 17,
+    "note": "Command 17 sets the continuous video move time",
+    "payload": "i32"
+   },
+   {
+    "command": 20,
+    "note": "Command 20 runs/resumes a keyframe program",
+    "payload": null
+   },
+   {
+    "command": 21,
+    "note": "Command 21 pauses a keyframe program",
+    "payload": null
+   },
+   {
+    "command": 22,
+    "note": "Command 22 stops a keyframe program",
+    "payload": null
+   },
+   {
+    "command": 23,
+    "note": "Command 23 causes the motor backlash to be taken up",
+    "payload": null
+   },
+   {
+    "command": 99,
+    "note": "Command 99 prints the contents of the key frame arrays to USBSerial",
+    "payload": null
+   },
+   {
+    "command": 100,
+    "note": "Command 100 returns the number of key frames set",
+    "payload": null
+   },
+   {
+    "command": 101,
+    "note": "Command 101 returns motor velocity update interval in milliseconds",
+    "payload": null
+   },
+   {
+    "command": 102,
+    "note": "Command 102 returns the current axis' position for a given x",
+    "payload": "f32"
+   },
+   {
+    "command": 103,
+    "note": "Command 103 returns the current axis' velocity for a given x",
+    "payload": "f32"
+   },
+   {
+    "command": 104,
+    "note": "Command 104 returns the current axis' acceleration for a given x",
+    "payload": "f32"
+   },
+   {
+    "command": 105,
+    "note": "Command 105 returns true if the current spline will not exceed the maximum motor speed for the current axis",
+    "payload": null
+   },
+   {
+    "command": 106,
+    "note": "Command 106 returns true if the current spline will not exceed the maximum motor speed for the current axis",
+    "payload": null
+   },
+   {
+    "command": 107,
+    "note": "Command 107 returns the currently set key frame continuous video duration",
+    "payload": null
+   },
+   {
+    "command": 120,
+    "note": "Command 120 returns run state of a key frame program: 0 = STOPPED, 1 = RUNNING, 2 = PAUSED",
+    "payload": null
+   },
+   {
+    "command": 121,
+    "note": "Command 121 returns the current key frame program running time",
+    "payload": null
+   },
+   {
+    "command": 122,
+    "note": "Command 122 returns the maximum key frame program running time",
+    "payload": null
+   },
+   {
+    "command": 123,
+    "note": "Command 123 returns the key frame program percent complete",
+    "payload": null
+   },
+   {
+    "command": 130,
+    "note": "Command 130 returns the time position of the requested key frame for the current axis",
+    "payload": null
+   },
+   {
+    "command": 131,
+    "note": "Command 131 returns the step position of the requested key frame for the current axis",
+    "payload": null
+   },
+   {
+    "command": 132,
+    "note": "Command 132 returns the velocity of the requested key frame for the current axis",
+    "payload": null
+   }
+  ],
+  "broadcast": [
+   {
+    "command": 1,
+    "note": "OM_BCAST_START",
+    "payload": null
+   },
+   {
+    "command": 2,
+    "note": "OM_BCAST_STOP",
+    "payload": null
+   },
+   {
+    "command": 3,
+    "note": "OM_BCAST_PAUSE",
+    "payload": null
+   },
+   {
+    "command": 4,
+    "note": "OM_BCAST_SET_ADDRESS",
+    "payload": "u8"
+   },
+   {
+    "command": 5,
+    "note": "OM_GRAFFIK_MODE_USB",
+    "payload": null
+   },
+   {
+    "command": 6,
+    "note": "OM_GRAFFIK_MODE_BLE",
+    "payload": null
+   },
+   {
+    "command": 7,
+    "note": "OM_BCAST_KF_START",
+    "payload": null
+   },
+   {
+    "command": 8,
+    "note": "OM_BCAST_KF_STOP",
+    "payload": null
+   },
+   {
+    "command": 9,
+    "note": "OM_BCAST_KF_PAUSE",
+    "payload": null
+   },
+   {
+    "command": 10,
+    "note": "OM_BCAST_GET_ADDRESS",
+    "payload": null
+   }
+  ]
+ }
+}

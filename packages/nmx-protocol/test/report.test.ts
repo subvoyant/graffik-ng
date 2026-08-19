@@ -187,6 +187,14 @@ describe("recorded passes in the report (ADR-0027)", () => {
     expect(md).toMatch(/2 failed read\(s\)/);
   });
 
+  it("indents the device-timing verdict under its own pass, not loose in the section", () => {
+    const md = bringUpReport({
+      at,
+      traces: { summaries: [summary({ timing: ["the device divided percent by 12000 ms while the uploaded move is 10000 ms"] })] },
+    });
+    expect(md).toMatch(/^ {2}- the device divided percent by 12000 ms/m);
+  });
+
   it("carries the sample cost, because the poll rate cannot be chosen off the rig", () => {
     const md = bringUpReport({ at, traces: { summaries: [summary({ medianCostMs: 240 })] } });
     expect(md).toMatch(/240 ms per sample/);

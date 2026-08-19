@@ -26,7 +26,7 @@ import {
   fitCalibration, diagnoseCalibration, repeatability,
   probeNmx, judgePorts, noUsablePortAdvice,
   capUntaughtJog, bringUpReport, PLAN_TYPE,
-  newTrace, addSample, traceCoverage, compareTraces, deviationFromPlan, traceToCsv,
+  newTrace, addSample, traceCoverage, compareTraces, deviationFromPlan, traceToCsv, timingCheck,
   NO_LIMITS, isTaught, jogWouldExceed, violationsForFilm, describeViolations,
 } from "@graffik-ng/nmx-protocol";
 
@@ -615,15 +615,33 @@ ipcMain.handle("nmx:pass-sample", async (_e, engine) => {
   return { state, percent, running };
 });
 
-ipcMain.handle("nmx:trace-end", (_e, endedBy) => {
+ipcMain.handle("nmx:trace-end", async (_e, endedBy, expectedMs) => {
   if (!activeTrace) return null;
   activeTrace.endedBy = endedBy ?? "complete";
+  /* Read the device's own arithmetic once, now, while the program's numbers are
+     still loaded. Key-frame query 122 IS the denominator the firmware divided
+     percent by; comparing it against the duration we uploaded catches ADR-0028's
+     bug from the rig rather than from a mode read-back. Guarded individually —
+     the recording is worth keeping whether or not this succeeds. */
+  const timing = { runTimeMs: null, totalMs: null, expectedMs: expectedMs ?? null };
+  try {
+    const c = requireClient();
+    if (activeTrace.engine === "keyframe") {
+      timing.runTimeMs = (await c.query(keyFrame.queryRunTime())).value;
+      timing.totalMs = (await c.query(keyFrame.queryMaxRunTime())).value;
+    } else {
+      timing.runTimeMs = (await c.query(general.queryRunTime())).value;
+      timing.totalMs = (await c.query(general.queryProgramTotalTime())).value;
+    }
+  } catch { /* leave the nulls; timingCheck says so out loud */ }
+  activeTrace.deviceTiming = timing;
   const cov = traceCoverage(activeTrace);
   traces.push(activeTrace);
   while (traces.length > TRACE_CAP) { traces.shift(); traceDropped++; }
   const id = activeTrace.id;
+  const timingLines = timingCheck(activeTrace);
   activeTrace = null;
-  return { id, coverage: cov, dropped: traceDropped };
+  return { id, coverage: cov, dropped: traceDropped, timing: timingLines };
 });
 
 ipcMain.handle("nmx:traces", () => ({
@@ -991,6 +1009,7 @@ ipcMain.handle("nmx:bringup-report", async (e, extra) => {
       traces: {
         summaries: traces.map((t) => ({
           id: t.id, engine: t.engine, endedBy: t.endedBy, ...traceCoverage(t),
+          timing: timingCheck(t),
         })),
         /* The last two COMPLETE passes on the same engine, compared without
            being asked. It is the number the session exists to produce, and a

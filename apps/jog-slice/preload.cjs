@@ -124,7 +124,7 @@ contextBridge.exposeInMainWorld("nmx", {
   // because the pass is observed from one place or from two disagreeing ones
   traceBegin: (engine, meta) => ipcRenderer.invoke("nmx:trace-begin", engine, meta),
   passSample: (engine) => ipcRenderer.invoke("nmx:pass-sample", engine),
-  traceEnd: (endedBy) => ipcRenderer.invoke("nmx:trace-end", endedBy),
+  traceEnd: (endedBy, expectedMs) => ipcRenderer.invoke("nmx:trace-end", endedBy, expectedMs),
   traces: () => ipcRenderer.invoke("nmx:traces"),
   traceCompare: (a, b) => ipcRenderer.invoke("nmx:trace-compare", a, b),
   traceVsPlan: (id, film) => ipcRenderer.invoke("nmx:trace-vs-plan", id, film),

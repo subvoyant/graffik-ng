@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   newTrace, addSample, traceCoverage, resampleByPercent,
   compareTraces, deviationFromPlan, deviationLines, traceToCsv,
-  motors,
+  timingCheck, motors, general, keyFrame,
 } from "../src/index.js";
 import type { PassTrace } from "../src/index.js";
 
@@ -206,5 +206,56 @@ describe("query 124 — is this motor mid send", () => {
     const p = motors.queryIsSending(2);
     expect(p.subAddress).toBe(2);
     expect(p.command).toBe(124);
+  });
+});
+
+describe("the device's own arithmetic (ADR-0029)", () => {
+  const withTiming = (t: Partial<NonNullable<PassTrace["deviceTiming"]>>, endedBy: PassTrace["endedBy"] = "complete") => {
+    const x = trace("a");
+    x.endedBy = endedBy;
+    x.deviceTiming = { runTimeMs: 10000, totalMs: 10000, expectedMs: 10000, ...t };
+    return x;
+  };
+
+  it("says so when nothing read the device timing, rather than staying silent", () => {
+    expect(timingCheck(trace("a"))[0]).toMatch(/not read/);
+  });
+
+  it("agrees when the denominator matches the uploaded move", () => {
+    expect(timingCheck(withTiming({}))[0]).toMatch(/agrees with the uploaded/);
+  });
+
+  it("catches the ADR-0028 skew FROM THE RIG: a denominator longer than the move", () => {
+    /* 10 s move, 2 s exposure folded into the denominator on the wrong plan type. */
+    const lines = timingCheck(withTiming({ totalMs: 12000, runTimeMs: 12000 }));
+    expect(lines[0]).toMatch(/divided percent by 12000 ms while the uploaded move is 10000 ms/);
+    expect(lines[0]).toMatch(/20\.0% longer/);
+    expect(lines[0]).toMatch(/plan type/);
+  });
+
+  it("tolerates a small disagreement rather than crying wolf every pass", () => {
+    expect(timingCheck(withTiming({ totalMs: 10100 }))[0]).toMatch(/agrees/);
+  });
+
+  it("flags a pass that called itself complete well short of the device's own clock", () => {
+    const lines = timingCheck(withTiming({ runTimeMs: 6000 }));
+    expect(lines.some((l) => /stopped short of its own clock/.test(l))).toBe(true);
+  });
+
+  it("does not flag a short run time on a pass that was stopped on purpose", () => {
+    const lines = timingCheck(withTiming({ runTimeMs: 6000 }, "stopped"));
+    expect(lines.some((l) => /stopped short/.test(l))).toBe(false);
+  });
+
+  it("says the denominator is unverified when the read failed", () => {
+    expect(timingCheck(withTiming({ totalMs: null }))[0]).toMatch(/unverified/);
+  });
+});
+
+describe("the queries this rests on are the ones the dispatch answers", () => {
+  it("key-frame 122 is the denominator; general 125 is the classic total", () => {
+    expect(keyFrame.queryMaxRunTime().command).toBe(122);
+    expect(general.queryProgramTotalTime().command).toBe(125);
+    expect(general.queryProgramTotalTime().subAddress).toBe(0);
   });
 });

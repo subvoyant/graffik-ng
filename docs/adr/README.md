@@ -33,3 +33,4 @@ Immutable decision records. Accepted = in force. Supersede, never edit. See ADR-
 | [0026](0026-partial-execution-refuse-or-say-so.md) | Partial execution: a headless runner refuses, a supervised UI says so and proceeds | Accepted |
 | [0027](0027-the-flight-recorder.md) | The flight recorder: record every pass, compare at matched percent, state the resolution floor | Accepted (unverified against hardware) |
 | [0028](0028-plan-type-and-what-percent-means.md) | Plan type is CONT_VID: it decides what percent complete is divided by | Accepted (unverified against hardware) |
+| [0029](0029-vocabulary-audit-against-the-dispatch.md) | The command vocabulary is checked against the firmware dispatch, in CI | Accepted |

@@ -1,6 +1,6 @@
 # Digest: apps/jog-slice (Electron app)
 
-**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.22) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
+**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.23) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
 
 ## Shape
 
@@ -160,6 +160,7 @@ Layout is a fixed frame — appbar / rail(244px) / stage / statusbar — with **
 - Per sample: 2 progress queries + 3 positions + 3 × query 124 = **8 round trips**, and each sample records its own `costMs`. At 19200 baud that is the number to watch; `prefs.trace.checkSending` drops it to 5 once the rig shows 124 is always false during a run.
 - `beginRecording` / `endRecording` bracket every pass. **Every stop path closes the recording rather than discarding it** — a stopped pass is the one you want to look at. `endedBy` is `complete` | `stopped` | `lost`.
 - Coverage is reported into the pass log the moment a pass ends, and a **backwards percent is said out loud** rather than left in the data.
+- On `trace-end` the app reads the **device's own elapsed and its own denominator** (key-frame 121/122, classic general 102/125) and hands over the duration it uploaded, so `timingCheck` can compare them (ADR-0029). The verdict goes to the pass log and, indented under its own pass, into the bring-up report.
 - **Overlay: the axis's own hue, dashed and thinner.** Identity belongs to the series (ADR-0012); provenance is style. A recorded Slide in a fifth colour would read as a fifth thing. Direct-labelled `N recorded passes · dashed`, because a dash pattern is not self-explanatory. Capped at 4 shown, and the cap says so when it drops one.
 - **`axisScale()` includes the overlays.** A deviation big enough to leave the lane is the most important thing the overlay could show; scaling from the plan alone would draw it outside the box. Same defect as v0.6's invisible taught limits.
 - `◉ Passes…` modal (the rail height budget is spent — new configuration goes in a modal): recordings with coverage, overlay/vs-plan/CSV per pass, and a two-pass comparison. Wording comes from `window.trace.deviationLines`, not restated here.

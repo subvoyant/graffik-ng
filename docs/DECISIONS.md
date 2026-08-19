@@ -319,6 +319,29 @@ kf_getMaxCamTime() = kf_getMaxMoveTime() + Camera.focusTime() + Camera.triggerTi
 
 **The pattern worth keeping:** the bug was found by asking "what exactly is this number divided by?" about a value I had just made load-bearing. Not by a test, not by review — by following one assumption down to the source that owns it. ADR-0004 says protocol facts come from the dispatch; this is the first time that rule caught something *semantic* rather than a command number, and it is the more valuable catch of the two kinds.
 
+## 2026-08-19 (v0.23 — ADR-0004 stops being a rule people follow)
+
+v0.22 was found by chasing one value to the firmware and reading what it was actually divided by. That worked, and it does not scale: there are **119 command builders**, and checking them by hand is exactly the kind of work that gets done once, thoroughly, and goes stale the next time somebody re-reads the reference in a hurry.
+
+- **The dispatch is now a committed fact table**, `packages/nmx-protocol/reference/nmx-dispatch.json`: every `case N:` each handler reaches, the firmware's own one-line comment, and a payload-width hint from which `Node.nto*` reader the case body calls. Facts and comments, not code — which is what ADR-0003 permits and what these clones have always been for. **CI never needs the GPL checkout**, because the table is data; `--extract <clone>` regenerates it.
+- **`scripts/audit-vocabulary.mjs --strict` is in `check.sh`.** ADR-0004 has said since week one that protocol facts come from the dispatch. It has been a rule people follow. It is now a rule CI enforces.
+- **First run, one real defect: `general.setMaxStepRate` sent general command 11**, and the firmware left a block comment where that case used to be reading *"Max step rate setting deprecated in version 0.70"* — 0.70 being the exact version this app gates on. `serMain` has no case 11, and the default branch's `response(false)` is commented out, so the device would have said **nothing at all** and stalled the one-command-in-flight queue until timeout. Nothing called it, so nothing ever hung. Removed.
+- **Coverage is reported, never failed on**, and I want the reason on the record: a protocol vocabulary is a *description of a device*, and completeness there is a feature. "Nobody in this app calls it" is not evidence about a command's correctness. Today: general 31/74, motor 45/63, camera 16/26, key-frame 19/34.
+- **This is deliberately NOT folded into the dead-export audit**, and the blind spot is worth naming: because `general` is itself reachable, ADR-0024's reachability analysis counts every one of its ~40 members as reachable too. It could never have found `setMaxStepRate`. Two audits, two different questions — *is it reachable* and *is it real*.
+
+### The coverage report paid for itself twice
+
+Reading what we do not send, two entries stood out, and they answer the question ADR-0028 raised one version earlier:
+
+- **Key-frame query 122 returns `kf_getMaxProgramTime()` — which IS the denominator** the firmware divides percent by: `kf_getMaxMoveTime() + start_delay` on CONT_VID, `kf_getMaxCamTime() + start_delay` on anything else. We already sent it and were not using it.
+- General query 125 (`totalProgramTime()`) is the classic-engine equivalent. We did not send it. Now we do.
+
+So every recorded pass now ends by reading the device's own elapsed and its own denominator, and comparing that denominator against the duration we uploaded:
+
+> *the device divided percent by 12000 ms while the uploaded move is 10000 ms — 20.0% longer. Percent, and every comparison joined on it, is scaled by that. Check the plan type and the start delay (ADR-0028).*
+
+**That detects the ADR-0028 bug class from the rig rather than from a mode read-back**, which matters more than it sounds: a read-back only catches the cause we already know about. A start delay nobody set on purpose, a firmware variant, or something none of us has thought of shows up here as the same disagreement, in the same sentence. The check is quiet when there is nothing to say, because a line that prints every pass is a line people stop reading.
+
 ## Open items
 - **NEXT (software):** sustained-cue tail dragging, cue duplication, a saved cue-preset library. MIDI last, and only on real need (every Node binding is native; Web MIDI would breach ADR-0007).
 - **NEXT (hardware, imminent): real NMX contact** — usbserial port, Connect, report firmware version (gate expects v70). Then KF vs classic replay fidelity (ratifies ADR-0006), **tune the soft-limit margins**, and **measure the rig calibration** (ADR-0015 export is untrustworthy until it exists).

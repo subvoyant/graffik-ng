@@ -1,6 +1,6 @@
 # Digest: @graffik-ng/nmx-protocol
 
-**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.22) · 364 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
+**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.23) · 378 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
 
 ## packet.ts — codec
 
@@ -92,6 +92,14 @@ Namespaces returning `Packet`: `general` (sub 0), `motors` (1–3, `Motor = 1|2|
 - `validateLensLibraryEntry` delegates to `validateLensMap` — an entry that would be rejected as a map cannot be used, and finding that out at apply time is too late.
 - `lensEntryToMap` / `lensMapToEntry` **copy** their marks; mutating one must not reach the other.
 
+### The vocabulary is checked against the dispatch (ADR-0029)
+
+- `reference/nmx-dispatch.json` — every `case N:` each handler reaches, the firmware's own comment, and a payload-width **hint**. Facts, not code (ADR-0003). Regenerate: `node scripts/audit-vocabulary.mjs --extract <clone>`; everything else runs off the committed table so **CI needs no GPL checkout**.
+- `scripts/audit-vocabulary.mjs --strict` (in `check.sh`) checks every builder targets the sub-address its block claims and a command that handler actually has. `--coverage` lists what the firmware answers that we never send.
+- **Found on the first run:** `general.setMaxStepRate` sent general cmd 11, *deprecated in firmware 0.70* — the version we gate on. `serMain` has no case 11 and the default branch does not reply, so a caller would have stalled the one-in-flight queue until timeout. Removed.
+- **Coverage is reported, never failed on.** A vocabulary is a description of a device; completeness is a feature. Deliberately not fed into the dead-export audit, whose "reachable from the product" premise is the wrong question here — and which could never have found this bug, since `general` being reachable makes all of its members reachable.
+- Sent today: general 31/74 · motor 45/63 · camera 16/26 · key-frame 19/34.
+
 ### Plan type, and what percent complete is divided by (ADR-0028)
 
 - `PLAN_TYPE = { sms: 0, contTimelapse: 1, contVideo: 2 }` — **three values**, from `Motion_Engine.ino`. The vocabulary called cmd 22 "0 = SMS, 1 = continuous" and typed it `0 | 1` for twenty versions, which made `CONT_VID` unrepresentable.
@@ -111,6 +119,7 @@ The only module that knows what the rig **did** rather than what it was told to 
 - **Nothing is invented to fill a hole** — no interpolation across a gap wider than `maxGapPct` (10% default), `null` outside the recorded span, and a comparison with too little overlap or too few points is **refused with the reason** (same idiom as ADR-0020 refusing to name a culprit from two spans).
 - **The resolution floor is computed and stated.** Progress is reported in whole percent, so a matched-percent comparison cannot resolve motion finer than one percent of the path; `floorSteps` is the worst steps-per-percent over the span, and a result at or under it is worded as a **bound, not a measurement**. `deviationLines` owns that wording — the app bridges it (`window.trace`) rather than restating it, so the modal and the bring-up report cannot disagree about the same number.
 - `addSample` deliberately does **not** clamp, dedupe or enforce monotonic percent. A controller reporting 40 then 38 is telling you something; `traceCoverage().wentBackwards` surfaces it.
+- `timingCheck(trace)` (ADR-0029) compares the device's own denominator against the duration we uploaded — key-frame query **122** is literally `kf_getMaxProgramTime()`, the number percent was divided by; general **125** is the classic equivalent. This catches ADR-0028's bug class **from the rig** rather than from a mode read-back, which only catches the cause already known. Quiet when there is nothing to say.
 - `traceToCsv` puts the **microstep setting in the column header** — a step count with no microstep is not a measurement.
 
 ## report.ts — the bring-up report (ADR-0023, traces added in v0.21)

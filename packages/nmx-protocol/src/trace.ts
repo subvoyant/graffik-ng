@@ -68,6 +68,58 @@ export interface PassTrace {
   samples: PassSample[];
   endedBy?: "complete" | "stopped" | "lost";
   note?: string;
+  /**
+   * The device's own arithmetic, read once when the pass ended (ADR-0029).
+   *
+   * `totalMs` is the very denominator the firmware divides by — key-frame query
+   * 122 is `kf_getMaxProgramTime()`, which is `kf_getMaxMoveTime() + start_delay`
+   * on CONT_VID and `kf_getMaxCamTime() + start_delay` on anything else. So
+   * comparing it against the duration we uploaded detects the ADR-0028 bug
+   * *from the rig* rather than from a mode read-back: if the device thinks the
+   * move is longer than we do, percent has been divided by something we did not
+   * account for, and every comparison in this trace is scaled by that ratio.
+   */
+  deviceTiming?: {
+    /** Device's elapsed run time at the end of the pass, ms. */
+    runTimeMs: number | null;
+    /** The denominator the device used for percent, ms. */
+    totalMs: number | null;
+    /** What WE think the move is, ms — the uploaded duration. */
+    expectedMs: number | null;
+  };
+}
+
+/**
+ * What the device's own numbers say about the percent we recorded.
+ *
+ * Pure, and deliberately quiet when there is nothing to say: a check that
+ * always prints a line trains people to skip the line.
+ */
+export function timingCheck(trace: PassTrace, tolerance = 0.02): string[] {
+  const t = trace.deviceTiming;
+  if (!t) return ["device timing not read — nothing checked the firmware's own arithmetic for this pass"];
+  const out: string[] = [];
+  if (t.totalMs === null || t.expectedMs === null || t.expectedMs <= 0) {
+    out.push("device timing incomplete — the denominator behind percent is unverified for this pass");
+    return out;
+  }
+  const ratio = t.totalMs / t.expectedMs;
+  if (Math.abs(ratio - 1) > tolerance) {
+    out.push(
+      `the device divided percent by ${Math.round(t.totalMs)} ms while the uploaded move is ` +
+      `${Math.round(t.expectedMs)} ms — ${((ratio - 1) * 100).toFixed(1)}% longer. Percent, and every ` +
+      `comparison joined on it, is scaled by that. Check the plan type and the start delay (ADR-0028).`,
+    );
+  } else {
+    out.push(`device denominator ${Math.round(t.totalMs)} ms agrees with the uploaded ${Math.round(t.expectedMs)} ms`);
+  }
+  if (t.runTimeMs !== null && t.totalMs > 0 && trace.endedBy === "complete") {
+    const ranPct = (t.runTimeMs / t.totalMs) * 100;
+    if (ranPct < 95) {
+      out.push(`the pass reported complete having run ${ranPct.toFixed(0)}% of the device's own total — it stopped short of its own clock`);
+    }
+  }
+  return out;
 }
 
 export interface NewTraceOptions {
