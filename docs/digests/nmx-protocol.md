@@ -1,6 +1,6 @@
 # Digest: @graffik-ng/nmx-protocol
 
-**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.21) · 361 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
+**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.22) · 364 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
 
 ## packet.ts — codec
 
@@ -91,6 +91,14 @@ Namespaces returning `Packet`: `general` (sub 0), `motors` (1–3, `Motor = 1|2|
 - `mergeLensLibrary(existing, incoming)` → `{merged, added, updated, rejected}`. **A malformed entry does NOT sink the import** — the survivors go in and the casualties are named. Deliberately the opposite of a move file: a move is one indivisible thing, a library is a collection. `merged` is always sorted by kind then name so a picker is readable.
 - `validateLensLibraryEntry` delegates to `validateLensMap` — an entry that would be rejected as a map cannot be used, and finding that out at apply time is too late.
 - `lensEntryToMap` / `lensMapToEntry` **copy** their marks; mutating one must not reach the other.
+
+### Plan type, and what percent complete is divided by (ADR-0028)
+
+- `PLAN_TYPE = { sms: 0, contTimelapse: 1, contVideo: 2 }` — **three values**, from `Motion_Engine.ino`. The vocabulary called cmd 22 "0 = SMS, 1 = continuous" and typed it `0 | 1` for twenty versions, which made `CONT_VID` unrepresentable.
+- **`kf_getPercentDone()` divides by `kf_getMaxMoveTime()` only on `CONT_VID`**; on anything else it divides by `kf_getMaxCamTime()`, which is move time **plus `Camera.focusTime() + Camera.triggerTime()`**. So the wrong plan type silently scales percent — and percent is the playhead's anchor (ADR-0025) and the recorder's join key (ADR-0027).
+- Classic `programPercent()` divides by `longest_move` for every non-SMS plan, so 2-point percent was never affected. Only the key-frame engine was.
+- `CONT_VID` also makes the classic engine fire the shutter once when a non-ping-pong program stops — the start/stop-record semantic. The official iOS app sends video mode for a video move.
+- Both engines now set `contVideo` explicitly and **read it back on general query 118**. Read-back, not trust-the-write: the failure this guards against is *something else having set it*.
 
 ## trace.ts — the flight recorder (ADR-0027)
 

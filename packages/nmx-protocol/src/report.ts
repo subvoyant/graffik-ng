@@ -30,6 +30,8 @@ export interface BringUpState {
     firmware?: number | null;
     supported?: boolean;
     overridden?: boolean;
+    /** Plan type read BACK off the device (general query 118), not what we sent. */
+    planType?: number | null;
   };
   limits?: AxisLimit[];
   calibration?: Record<string, number | undefined>;
@@ -59,6 +61,7 @@ export interface BringUpState {
 }
 
 const AXIS_NAMES = ["Slide", "Pan", "Tilt"] as const;
+const PLAN_TYPE_NAMES: Record<number, string> = { 0: "SMS", 1: "continuous time lapse", 2: "continuous video" };
 const CAL_UNIT = { slide: "mm", pan: "deg", tilt: "deg" } as const;
 
 const bound = (v: number | null) => (v === null || v === undefined ? "—" : String(v));
@@ -85,6 +88,18 @@ export function bringUpReport(s: BringUpState): string {
     L.push(`- Port: \`${c.port}\``);
     L.push(`- Firmware: ${c.firmware ?? "unknown"}${c.supported === false ? " — **not the verified version**" : ""}`);
     if (c.overridden) L.push(`- ⚠ Firmware gate was **overridden** — programmed moves ran on an unverified command set (ADR-0004).`);
+    /* Read back, not assumed. On anything but CONT_VID the firmware divides
+       percent complete by move time PLUS the camera's focus and trigger time,
+       which skews the playhead and every recorded comparison in this report. */
+    if (c.planType === null || c.planType === undefined) {
+      L.push(`- Plan type: **not read back** — no key-frame upload happened, so nothing checked it.`);
+    } else {
+      const name = PLAN_TYPE_NAMES[c.planType] ?? `unknown (${c.planType})`;
+      L.push(
+        `- Plan type latched on the device: **${name}**` +
+        (c.planType === 2 ? "" : ` — ⚠ expected continuous video. Percent complete is divided by move time PLUS the camera's focus and trigger time on any other plan type, so the playhead and every comparison below are skewed by that factor.`),
+      );
+    }
   }
   L.push("");
 

@@ -7,7 +7,7 @@ import { computeVelocities, splineAt } from "../src/spline.js";
 import { buildKeyFrameMove, runSequence } from "../src/move.js";
 import { SimulatedNmx } from "../src/simulator.js";
 import { NmxClient, handshake } from "../src/client.js";
-import { broadcast, general, keyFrame, motors } from "../src/commands.js";
+import { broadcast, general, keyFrame, motors, PLAN_TYPE } from "../src/commands.js";
 
 describe("Hermite spline velocity solver", () => {
   const points = [
@@ -203,5 +203,25 @@ describe("simulator camera + physics", () => {
     await client.send(motors.stop(1));
     sim.tick(500);
     expect(sim.positions[0]).toBe(400);
+  });
+});
+
+describe("plan type survives the round trip (ADR-0028)", () => {
+  it("what we set is what the device reports back", async () => {
+    const sim = new SimulatedNmx();
+    const client = new NmxClient(sim);
+    await handshake(client);
+    await client.send(general.setProgramMode(PLAN_TYPE.contVideo));
+    expect((await client.query(general.queryPlanType())).value).toBe(PLAN_TYPE.contVideo);
+  });
+
+  it("reports whatever was actually latched, including a wrong one", async () => {
+    const sim = new SimulatedNmx();
+    const client = new NmxClient(sim);
+    await handshake(client);
+    /* Standing in for the case this exists to catch: something else — the stock
+       app, an older build of ours — left the device in time-lapse. */
+    await client.send(general.setProgramMode(PLAN_TYPE.contTimelapse));
+    expect((await client.query(general.queryPlanType())).value).toBe(PLAN_TYPE.contTimelapse);
   });
 });

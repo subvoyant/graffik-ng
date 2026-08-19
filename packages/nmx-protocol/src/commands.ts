@@ -50,6 +50,32 @@ const bool = (b: boolean) => be.u8(b ? 1 : 0);
 /* General / program engine (sub-address 0) — firmware serMain          */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Plan type (general cmd 22, query 118) — `Motion_Engine.ino` `SMS 0`,
+ * `CONT_TL 1`, `CONT_VID 2`.
+ *
+ * **This is not just a label.** `kf_getPercentDone()` reads:
+ *
+ * ```
+ * if (planType() == CONT_VID) kf_run_time / (kf_getMaxMoveTime() + start_delay)
+ * else                        kf_run_time / (kf_getMaxCamTime() + start_delay)
+ * ```
+ *
+ * and `kf_getMaxCamTime() = kf_getMaxMoveTime() + Camera.focusTime() + Camera.triggerTime()`.
+ * So on any plan type **other than** `CONT_VID`, the reported percent is scaled
+ * down by the camera's focus and trigger time — the move finishes before the
+ * percent does. Anything that treats percent as a position on the move (the
+ * playhead, ADR-0025; the flight recorder's join key, ADR-0027) is wrong by
+ * that factor.
+ *
+ * `CONT_VID` also makes the classic engine fire the shutter once at the end of
+ * a pass (`OM_ControlCycle.ino`), which is the start/stop-record semantic a
+ * video shoot expects. The official iOS app sends `NMXProgramModeVideo` for a
+ * video move; Graffik NG does video moves, so it sends the same.
+ */
+export const PLAN_TYPE = { sms: 0, contTimelapse: 1, contVideo: 2 } as const;
+export type PlanType = (typeof PLAN_TYPE)[keyof typeof PLAN_TYPE];
+
 export const general = {
   /** cmd 2 — start stored program on all axes. */
   startProgram: () => gen(2),
@@ -73,8 +99,15 @@ export const general = {
   setMaxRunTime: (ms: number) => gen(20, be.u32(ms)),
   /** cmd 21 — program start delay, ms (countdown before motion — useful for multi-pass cueing). */
   setStartDelay: (ms: number) => gen(21, be.u32(ms)),
-  /** cmd 22 — program move mode: 0 = SMS, 1 = continuous. (NOT 0x22 — see version-drift note.) */
-  setProgramMode: (mode: 0 | 1) => gen(22, be.u8(mode)),
+  /**
+   * cmd 22 — **plan type**, and it has THREE values, not two.
+   * (NOT 0x22 — see version-drift note.)
+   *
+   * `Motion_Engine.ino`: `SMS 0`, `CONT_TL 1`, `CONT_VID 2`. Reading this as a
+   * boolean-ish "0 = SMS, 1 = continuous" made `CONT_VID` unrepresentable, and
+   * the value is load-bearing well beyond naming — see `PLAN_TYPE` below.
+   */
+  setProgramMode: (mode: PlanType) => gen(22, be.u8(mode)),
   /** cmd 23 — joystick mode on/off (gates non-jog commands unless Graffik mode). */
   setJoystickMode: (enabled: boolean) => gen(23, bool(enabled)),
   /** cmd 24 — ping-pong (bounce) mode. */
@@ -106,7 +139,17 @@ export const general = {
   queryVoltage: () => gen(107),
   /** query 108 — motor current draw (fixed-point ×100). */
   queryCurrent: () => gen(108),
-  /** query 123 — program progress %. */
+  /** query 118 — the plan type currently latched on the device. */
+  queryPlanType: () => gen(118),
+  /**
+   * query 123 — program progress %.
+   *
+   * **Time-based, not distance-based**, on both engines: classic
+   * `programPercent()` is `(run_time - start_delay) / longest_move` for any
+   * non-SMS plan, and `kf_getPercentDone()` is `kf_run_time / (denominator)`.
+   * That is what makes percent a legitimate join key between passes
+   * (ADR-0025, ADR-0027) — but see `PLAN_TYPE` for what sets the denominator.
+   */
   queryProgramProgress: () => gen(123),
   /** query 124 — all-motor status bitfield. */
   queryMotorsStatus: () => gen(124),

@@ -158,7 +158,7 @@ if (!window.nmx) {
       }
       return { axis, samples: s };
     }),
-    uploadKf: async (f) => f.axes.length * 8,
+    uploadKf: async (f) => ({ packets: f.axes.length * 8, planType: 2, wanted: 2 }),
     cueMs: async (f) => Math.round((f.cueFrames * 1000 * f.timebase.den) / f.timebase.num),
     previewLens: async (f) => {
       const out = {};
@@ -2742,8 +2742,16 @@ function followPlayhead() {
 /* ---------------- KF transport ---------------- */
 $("tlUpload").onclick = async () => {
   try {
-    const n = await window.nmx.uploadKf(film);
+    const up = await window.nmx.uploadKf(film);
+    const n = typeof up === "number" ? up : up.packets;
     uploaded = true;
+    /* The plan type decides what the firmware divides percent complete by, so a
+       wrong one skews the playhead and every recorded comparison. It is read
+       back off the device, and a mismatch is said out loud rather than left in
+       a number nobody looks at. */
+    if (up && typeof up === "object" && up.planType !== null && up.planType !== up.wanted) {
+      logPass(`plan type on the device is ${up.planType}, expected ${up.wanted} (continuous video) — percent complete and every recorded comparison will be skewed`);
+    }
     /* The NMX has no lens channel — lens lanes go to the trigger board instead,
        and only at arm time. Say which of the two happened, because an operator
        who assumes a focus pull was sent finds out in the rushes. */

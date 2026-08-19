@@ -5,7 +5,7 @@
  * primitives, the key-frame engine, and broadcasts.
  */
 import { describe, expect, it } from "vitest";
-import { broadcast, encodePacket, general, keyFrame, motors } from "../src/index.js";
+import { broadcast, encodePacket, general, keyFrame, motors, PLAN_TYPE } from "../src/index.js";
 
 const hexOf = (p: Parameters<typeof encodePacket>[0]) => Buffer.from(encodePacket(p)).toString("hex");
 const want = (s: string) => s.replace(/\s+/g, "").toLowerCase();
@@ -85,5 +85,27 @@ describe("broadcasts (address 1, OMMoCoDefs.h)", () => {
     expect(hexOf(broadcast.pause())).toBe(want("00 00 00 00 00 FF 01 00 03 00"));
     expect(hexOf(broadcast.graffikModeUsb())).toBe(want("00 00 00 00 00 FF 01 00 05 00"));
     expect(hexOf(broadcast.assignAddress(3))).toBe(want("00 00 00 00 00 FF 01 00 04 01 03"));
+  });
+});
+
+describe("plan type (serMain cmd 22 / query 118) — three values, not two", () => {
+  /**
+   * `Motion_Engine.ino`: SMS 0, CONT_TL 1, CONT_VID 2. The vocabulary described
+   * this as "0 = SMS, 1 = continuous" for twenty versions, which made CONT_VID
+   * unrepresentable — and CONT_VID is the one that decides what percent
+   * complete is divided by (see PLAN_TYPE).
+   */
+  it("encodes all three plan types", () => {
+    expect(hexOf(general.setProgramMode(PLAN_TYPE.sms))).toBe(want("00 00 00 00 00 FF 03 00 16 01 00"));
+    expect(hexOf(general.setProgramMode(PLAN_TYPE.contTimelapse))).toBe(want("00 00 00 00 00 FF 03 00 16 01 01"));
+    expect(hexOf(general.setProgramMode(PLAN_TYPE.contVideo))).toBe(want("00 00 00 00 00 FF 03 00 16 01 02"));
+  });
+
+  it("the enum matches the firmware defines", () => {
+    expect(PLAN_TYPE).toEqual({ sms: 0, contTimelapse: 1, contVideo: 2 });
+  });
+
+  it("plan type is READ BACK on general query 118, so a latched mode can be checked", () => {
+    expect(hexOf(general.queryPlanType())).toBe(want("00 00 00 00 00 FF 03 00 76 00"));
   });
 });

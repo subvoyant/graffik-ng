@@ -297,6 +297,28 @@ This is the fourth time this session that *looking* beat *measuring*, and this t
 - **My own stub lied to my own verification.** The `window.trace.deviationLines` browser-preview stub returned the refusal line unconditionally, so the render check reported "not comparable" over a perfectly good comparison — and for a minute I believed it. **A stub must be at least as faithful as the thing it stands in for**, which is hub invariant 23 (the simulator must be exactly as strict as the firmware) one layer up. Written into the digest as a rule rather than left as a bug I fixed.
 - The overlay also drew straight off the top of its lane, because `axisScale()` was computed from the plan alone. **A deviation big enough to leave the lane is the single most important thing an overlay could show**, and it was the one thing guaranteed invisible. Same defect as v0.6's taught limits sitting outside the move's span. Recorded passes are in the scale now.
 
+## 2026-08-19 (v0.22 — the plan type was wrong, and it decides what percent means)
+
+Found one hour after shipping the flight recorder, by going to check an assumption in it rather than assuming.
+
+ADR-0027 made the controller's **percent complete** load-bearing: it is the join key between two recorded passes and the anchor for the playhead. Before trusting the percent→frame mapping I went to the dispatch to confirm percent is linear in *time* rather than distance. It is. But the denominator is not what I expected:
+
+```
+if (planType() == CONT_VID) kf_run_time / (kf_getMaxMoveTime() + start_delay)
+else                        kf_run_time / (kf_getMaxCamTime()  + start_delay)
+kf_getMaxCamTime() = kf_getMaxMoveTime() + Camera.focusTime() + Camera.triggerTime()
+```
+
+- **`Motion_Engine.ino` defines THREE plan types** — `SMS 0`, `CONT_TL 1`, `CONT_VID 2`. Our command vocabulary described cmd 22 as *"0 = SMS, 1 = continuous"* and typed it `(mode: 0 | 1)`, which made `CONT_VID` **literally unrepresentable**. A two-valued reading of a three-valued enum, carried in a doc comment for twenty versions, and the type system then enforced the mistake.
+- **The classic path sent CONT_TL. The key-frame path never set a plan type at all** — so a KF pass ran under whatever was last latched: our own classic arm, the stock app, or whatever the device booted with.
+- **The damage is silent and plausible.** On any plan type but CONT_VID, percent is scaled down by the camera's focus and trigger time. Default 120 ms shutter on a 10 s move is about 1%; a 2 s exposure is 17%. The playhead would stop short while the rig finished, and every "vs plan" number would compare the rig at time *t* against the plan at a different time. Nothing would look broken. **The recorder I shipped an hour earlier would have produced a careful, well-documented, wrong dataset** — which is exactly what its own ADR says the send-to rescaling would have done, and I caught that one and not this one.
+- **CONT_VID also fires the shutter once when a non-ping-pong classic program stops** — the start/stop-record semantic a video shoot expects. In CONT_TL it does not. So we were also not doing the camera thing a video rig is supposed to do.
+- The official iOS app sends `NMXProgramModeVideo` for a video move. We shoot video moves. We were sending time-lapse.
+
+**Both engines now set it explicitly, and it is READ BACK on general query 118 rather than assumed.** That distinction is the actual decision: the failure being guarded against is not a dropped write, it is *something else having set it*, and a write that succeeded tells you nothing about what a later actor did. The whole bug existed because the KF path assumed a mode it never set — assuming a mode it did set is the same mistake with one more step. The bring-up report names the latched plan type, or says **not read back** when no upload has checked it.
+
+**The pattern worth keeping:** the bug was found by asking "what exactly is this number divided by?" about a value I had just made load-bearing. Not by a test, not by review — by following one assumption down to the source that owns it. ADR-0004 says protocol facts come from the dispatch; this is the first time that rule caught something *semantic* rather than a command number, and it is the more valuable catch of the two kinds.
+
 ## Open items
 - **NEXT (software):** sustained-cue tail dragging, cue duplication, a saved cue-preset library. MIDI last, and only on real need (every Node binding is native; Web MIDI would breach ADR-0007).
 - **NEXT (hardware, imminent): real NMX contact** — usbserial port, Connect, report firmware version (gate expects v70). Then KF vs classic replay fidelity (ratifies ADR-0006), **tune the soft-limit margins**, and **measure the rig calibration** (ADR-0015 export is untrustworthy until it exists).

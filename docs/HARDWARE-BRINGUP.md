@@ -95,6 +95,12 @@ that repeat beautifully unloaded can drop steps under mass.
   the endpoint; the app is the only measurement of the middle. If the tape says
   0.3 mm and the app says the carriage was 400 steps out at 60%, **both are true**
   and something interesting happens mid-move.
+- **Check the plan type line in the bring-up report** (ADR-0028). It should read
+  *continuous video*. If it says anything else, the percent the playhead and every
+  comparison are built on has been divided by the wrong thing, and the numbers
+  above are skewed rather than wrong-looking. Also watch whether the shutter fires
+  once at the end of a classic pass — that is CONT_VID doing start/stop record, and
+  it has never been seen on a real camera.
 - If a comparison comes back *"a bound, not a measurement"*, that is the app saying
   the deviation was smaller than a whole-percent progress report can resolve. It is
   a real result — it just means "at least this good", not "exactly this".

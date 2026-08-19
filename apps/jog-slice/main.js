@@ -25,7 +25,7 @@ import {
   validateLensLibraryEntry, lensLibraryId,
   fitCalibration, diagnoseCalibration, repeatability,
   probeNmx, judgePorts, noUsablePortAdvice,
-  capUntaughtJog, bringUpReport,
+  capUntaughtJog, bringUpReport, PLAN_TYPE,
   newTrace, addSample, traceCoverage, compareTraces, deviationFromPlan, traceToCsv,
   NO_LIMITS, isTaught, jogWouldExceed, violationsForFilm, describeViolations,
 } from "@graffik-ng/nmx-protocol";
@@ -418,7 +418,10 @@ ipcMain.handle("nmx:arm-move", async (_e, travelFrames, accelFrames, decelFrames
   const travelMs = framesToMs(travelFrames, timebase);
   const accelMs = framesToMs(accelFrames, timebase);
   const decelMs = framesToMs(decelFrames, timebase);
-  await c.send(general.setProgramMode(1));
+  /* CONT_VID, not CONT_TL. The value decides what percent complete is divided
+     by, and on a video shoot it also makes the classic engine fire the shutter
+     once at the end of the pass (start/stop record). See PLAN_TYPE. */
+  await c.send(general.setProgramMode(PLAN_TYPE.contVideo));
   await c.send(general.setStartDelay(0));   // cue countdown is host-side
   for (const m of [1, 2, 3]) {
     await c.send(motors.setTravel(m, travelMs));
@@ -468,9 +471,21 @@ ipcMain.handle("nmx:upload-kf", async (_e, film) => {
   // Nothing reaches the controller before the whole move is checked (ADR-0013).
   const v = violationsForFilm(film, prefs.limits);
   if (v.length) throw new Error("Soft limits: " + describeViolations(v));
+  /* The key-frame path never set a plan type at all, so a KF pass ran under
+     whatever was last latched — by our own classic arm, or by the stock app.
+     It is not cosmetic: on anything but CONT_VID the firmware divides percent
+     complete by move time PLUS the camera's focus and trigger time, so the
+     playhead (ADR-0025) and the recorder's join key (ADR-0027) are both wrong
+     by that factor. Set it explicitly, every upload. */
+  await c.send(general.setProgramMode(PLAN_TYPE.contVideo));
+  /* Read it back rather than assume the write took. One query, and it is the
+     difference between a percent that means what we think it means and one
+     that is quietly scaled by the camera's focus and trigger time. */
+  try { latchedPlanType = (await c.query(general.queryPlanType())).value; }
+  catch { latchedPlanType = null; }
   const packets = buildKeyFrameMove(filmAxesToMs(film), { videoTimeMs: filmDurationMs(film) });
   for (const p of packets) await c.send(p);
-  return packets.length;
+  return { packets: packets.length, planType: latchedPlanType, wanted: PLAN_TYPE.contVideo };
 });
 
 /**
@@ -524,6 +539,9 @@ let traceSeq = 0;
 let traceDropped = 0;
 
 const AXIS_NAMES = ["Slide", "Pan", "Tilt"];
+
+/** Last plan type read back off the device — null until an upload has checked. */
+let latchedPlanType = null;
 
 async function readMicrosteps() {
   const out = [];
@@ -956,6 +974,7 @@ ipcMain.handle("nmx:bringup-report", async (e, extra) => {
       at: new Date().toISOString(),
       appVersion: app.getVersion(),
       connection: {
+        planType: latchedPlanType,
         /* `prefs.lastPort` is written on every successful connect, so it is
            the record of what actually answered — a disconnect must not erase
            the report's memory of the session. */

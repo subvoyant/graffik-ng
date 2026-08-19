@@ -186,6 +186,10 @@ export class SimulatedNmx implements PortLike {
       case 27: this.stopPoints = [...this.positions]; return this.ack();
       case 50: this.graffikMode = p.payload[0] !== 0; return this.ack();
       case 100: return this.typedLong(this.firmwareVersion);
+      /* Answers what was actually latched, not what we wish had been. The whole
+         point of reading it back is to catch a pass running under a plan type
+         somebody else set (PLAN_TYPE — the denominator of percent depends on it). */
+      case 118: return this.typedByte(this.programMode);
       case 123: {
         // animate: each poll advances the "move" so demo passes complete
         if (this.running) {

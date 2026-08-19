@@ -1,6 +1,6 @@
 # Digest: apps/jog-slice (Electron app)
 
-**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.21) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
+**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.22) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
 
 ## Shape
 
@@ -147,6 +147,12 @@ Layout is a fixed frame — appbar / rail(244px) / stage / statusbar — with **
 - **How to re-verify** (needs Playwright, which the repo does not depend on — this runs outside it): load `index.html` headless, `startPassSweep(...)`, sample `playheadFrame` on every `requestAnimationFrame`, and drive `anchorPassSweep()` every 500 ms with values that **deliberately disagree** with the extrapolation by ±1%. Then check the per-frame velocity for *backwards steps* and *spikes over 3× median*. Disagreeing readings are the case that snaps; agreeing ones prove nothing.
 - Measured: 60 fps, `render()` ≈ 0.74 ms on a six-lane 30 s move, 0 backwards steps, 0 velocity spikes over 3× median. Redrawing less often would have been the obvious wrong fix.
 - `followPlayhead()` pans the view when the sweep leaves the visible range.
+
+### Plan type (v0.22 — ADR-0028)
+
+- `nmx:arm-move` and `nmx:upload-kf` both send `setProgramMode(PLAN_TYPE.contVideo)`. The KF path previously sent **nothing**, so a pass ran under whatever was last latched.
+- `nmx:upload-kf` **reads it back** (general query 118) and returns `{packets, planType, wanted}`; the renderer writes a pass-log line on a mismatch saying that percent complete and every recorded comparison will be skewed. `main` keeps the last read-back for the bring-up report.
+- The return shape changed from a number to an object — the renderer accepts both, because an older preload could still be in play during development.
 
 ## The flight recorder (v0.21 — ADR-0027)
 

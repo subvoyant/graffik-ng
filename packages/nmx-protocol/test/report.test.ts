@@ -135,6 +135,30 @@ describe("the bring-up report", () => {
   });
 });
 
+describe("the plan type is read back, not assumed (ADR-0028)", () => {
+  it("says NOT READ BACK when no upload checked it", () => {
+    const md = bringUpReport({ at, connection: { port: "/dev/x", firmware: 70, supported: true } });
+    expect(md).toMatch(/Plan type: \*\*not read back\*\*/);
+  });
+
+  it("names continuous video without a warning", () => {
+    const md = bringUpReport({ at, connection: { port: "/dev/x", firmware: 70, supported: true, planType: 2 } });
+    expect(md).toMatch(/\*\*continuous video\*\*/);
+    expect(md).not.toMatch(/expected continuous video/);
+  });
+
+  it("warns on continuous time lapse and says exactly what it skews", () => {
+    const md = bringUpReport({ at, connection: { port: "/dev/x", firmware: 70, supported: true, planType: 1 } });
+    expect(md).toMatch(/continuous time lapse/);
+    expect(md).toMatch(/focus and trigger time/);
+  });
+
+  it("does not pretend to recognise a plan type it has never heard of", () => {
+    const md = bringUpReport({ at, connection: { port: "/dev/x", firmware: 70, supported: true, planType: 9 } });
+    expect(md).toMatch(/unknown \(9\)/);
+  });
+});
+
 describe("recorded passes in the report (ADR-0027)", () => {
   type Summary = NonNullable<BringUpState["traces"]>["summaries"][number];
   const summary = (o: Partial<Summary> = {}): Summary => ({
