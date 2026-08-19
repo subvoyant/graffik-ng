@@ -144,6 +144,7 @@ contextBridge.exposeInMainWorld("nmx", {
   commissionApply: () => ipcRenderer.invoke("nmx:commission-apply"),
   commissionPass: (readingMm) => ipcRenderer.invoke("nmx:commission-pass", readingMm),
   commissionSet: (patch) => ipcRenderer.invoke("nmx:commission-set", patch),
+  bringUpReport: (extra) => ipcRenderer.invoke("nmx:bringup-report", extra),
   // e-stop
   stopAll: () => ipcRenderer.invoke("nmx:stop-all"),
 });

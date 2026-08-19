@@ -1,6 +1,6 @@
 # Digest: @graffik-ng/nmx-protocol
 
-**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.15) · 324 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
+**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.16) · 340 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
 
 ## packet.ts — codec
 
@@ -91,6 +91,17 @@ Namespaces returning `Packet`: `general` (sub 0), `motors` (1–3, `Motor = 1|2|
 - `mergeLensLibrary(existing, incoming)` → `{merged, added, updated, rejected}`. **A malformed entry does NOT sink the import** — the survivors go in and the casualties are named. Deliberately the opposite of a move file: a move is one indivisible thing, a library is a collection. `merged` is always sorted by kind then name so a picker is readable.
 - `validateLensLibraryEntry` delegates to `validateLensMap` — an entry that would be rejected as a map cannot be used, and finding that out at apply time is too late.
 - `lensEntryToMap` / `lensMapToEntry` **copy** their marks; mutating one must not reach the other.
+
+## report.ts — the bring-up report (ADR-0023)
+
+- `bringUpReport(state)` → markdown. **Pure**: caller supplies the timestamp, so the same session always renders the same bytes and it is testable without freezing time.
+- **Everything unmeasured is listed as "not measured", never omitted** — a report that drops what nobody got to reads like a complete one, and knowing what is still unknown is the point.
+- **Warnings are spelled out, not counted** ("1 warning" tells nobody anything), and **measured-but-not-applied is flagged**: measuring a calibration and never pressing Apply is the easiest way to leave a session believing a number is in effect when it is not.
+- Pass log comes from the RENDERER (main has never seen it), verbatim and newest-first.
+
+### limits.ts also carries the first-motion creep cap (ADR-0023)
+
+- `capUntaughtJog(limit, stepsPerSec)` → `UNTAUGHT_JOG_CAP` (500 steps/s) on an axis with **neither** bound taught. The first jog on a new rig necessarily happens before limits exist — limits are taught by jogging to them — so this is the one moment ADR-0013 cannot help. **Self-clears on the first taught bound**, which is why there is no override switch to leave on. Zero passes through uncapped.
 
 ## diagnose.ts — the connection doctor (ADR-0022)
 

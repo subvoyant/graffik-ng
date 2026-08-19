@@ -1,6 +1,6 @@
 # Digest: apps/jog-slice (Electron app)
 
-**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.15) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
+**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.16) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
 
 ## Shape
 
@@ -131,6 +131,12 @@ Layout is a fixed frame — appbar / rail(244px) / stage / statusbar — with **
 - **`nmx:cues-arm` uploads the lens program BEFORE `ARM`.** `ARM` is what latches it and its reply carries the count the backend cross-checks; uploading after would arm an empty curve.
 - **`nmx:cue-check` returns `lensProblems` too, and `armCuesForPass` is one gate for both.** Two gates would be two chances to skip one, and both failures cost the same thing — a take.
 - ⌾ Lens… modal layout follows the *workflow*: marks table → add-mark row → **Jog** (drives the barrel and fills the "At" field, so marking is drive-read-type) → MOTOR subhead → device chip + Calibrate + travel → top speed + handedness. The jog was originally down in the motor block, which broke the marking loop and wrapped the Calibrate button onto its own line. `#lensMarkRows` is capped at 190 px and scrolls — a real lens map runs to a dozen marks and the sheet must not outgrow the window.
+## Bring-up report + creep (v0.16 — ADR-0023)
+
+- `nmx:jog` applies `capUntaughtJog` **before** the limit check — main-side, same reasoning as ADR-0013.
+- `nmx:bringup-report` assembles prefs + connection state + the renderer's pass log into one markdown file. The renderer supplies `log` (newest-first, verbatim) and `notes`; main has never seen the pass log.
+- Button lives at the bottom of the ⚖ Rig commissioning panel — same session, same purpose.
+
 ## Connection doctor (v0.15 — ADR-0022)
 
 - `nmx:list-ports` now returns `{ports:[{path,manufacturer,likelihood,why}], advice}`. The renderer sorts likely-first and **marks** unlikely/never entries rather than hiding them. Both port pickers (rail, cue dialog) tolerate the old array shape.

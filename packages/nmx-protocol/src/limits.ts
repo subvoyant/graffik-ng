@@ -107,3 +107,38 @@ export function describeViolations(v: LimitViolation[]): string {
   if (v.length > 4) parts.push(`…and ${v.length - 4} more`);
   return parts.join("; ");
 }
+
+/**
+ * Creep speed for an axis whose travel nobody has taught yet (ADR-0023).
+ *
+ * The first jog on a new rig happens BEFORE any limits exist — that is the
+ * order the procedure has to run in, because limits are taught by jogging to
+ * them. So the one moment the soft-limit system cannot protect anything is
+ * exactly the moment the operator knows least about the machine.
+ *
+ * A slow collision is a recoverable noise; a fast one bends a rail or drops a
+ * camera off a head. Every motion-control operator creeps on first motion, and
+ * the software should default to what they would do anyway.
+ *
+ * This clears itself: teach EITHER bound on an axis and it goes to full speed.
+ * That is one button press, which is why there is no separate override to
+ * forget you left on.
+ */
+export const UNTAUGHT_JOG_CAP = 500;
+
+export interface CappedJog {
+  stepsPerSec: number;
+  capped: boolean;
+  reason: string | null;
+}
+
+export function capUntaughtJog(l: AxisLimit, stepsPerSec: number, cap = UNTAUGHT_JOG_CAP): CappedJog {
+  if (isTaught(l) || Math.abs(stepsPerSec) <= cap) {
+    return { stepsPerSec, capped: false, reason: null };
+  }
+  return {
+    stepsPerSec: Math.sign(stepsPerSec) * cap,
+    capped: true,
+    reason: `no travel taught on this axis yet — creeping at ${cap} steps/s. Teach a limit to unlock full speed.`,
+  };
+}

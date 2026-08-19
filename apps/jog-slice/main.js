@@ -25,6 +25,7 @@ import {
   validateLensLibraryEntry, lensLibraryId,
   fitCalibration, diagnoseCalibration, repeatability,
   probeNmx, judgePorts, noUsablePortAdvice,
+  capUntaughtJog, bringUpReport,
   NO_LIMITS, isTaught, jogWouldExceed, violationsForFilm, describeViolations,
 } from "@graffik-ng/nmx-protocol";
 
@@ -362,8 +363,17 @@ ipcMain.handle("nmx:enable-motors", async () => {
 
 ipcMain.handle("nmx:jog", async (e, motor, stepsPerSec) => {
   const c = requireClient();
-  const speed = Math.max(-MAX_JOG_SPEED, Math.min(MAX_JOG_SPEED, stepsPerSec));
-  const lim = prefs.limits[motor - 1];
+  const clamped = Math.max(-MAX_JOG_SPEED, Math.min(MAX_JOG_SPEED, stepsPerSec));
+  const lim = prefs.limits[motor - 1] ?? { min: null, max: null };
+
+  /* An axis nobody has taught gets a creep cap (ADR-0023). The first jog on a
+     new rig necessarily happens before any limits exist — limits are taught BY
+     jogging to them — so this is the one moment the limit system cannot help.
+     Enforced HERE, main-side, for the same reason the limits themselves are
+     (ADR-0013): no renderer bug can bypass it. Self-clears on the first taught
+     bound. */
+  const cap = capUntaughtJog(lim, clamped);
+  const speed = cap.stepsPerSec;
 
   if (speed !== 0 && lim && isTaught(lim)) {
     const res = await c.query(motors.queryPosition(motor));
@@ -752,6 +762,48 @@ async function declareLensMotors(be, kinds = LENS_KINDS) {
     await be.declareLensAxis({ kind, steps: m.steps, maxStepsPerSec: m.maxStepsPerSec, invert: m.invert });
   }
 }
+
+/**
+ * Write everything this app knows about this rig, today, to a file.
+ *
+ * A hardware session produces facts that exist only in that room, and by
+ * default they live in somebody's memory until the next morning (ADR-0023).
+ */
+ipcMain.handle("nmx:bringup-report", async (e, extra) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  try {
+    const md = bringUpReport({
+      at: new Date().toISOString(),
+      appVersion: app.getVersion(),
+      connection: {
+        /* `prefs.lastPort` is written on every successful connect, so it is
+           the record of what actually answered — a disconnect must not erase
+           the report's memory of the session. */
+        port: prefs.lastPort,
+        firmware: firmwareVersion,
+        supported: firmwareVersion === SUPPORTED_FIRMWARE,
+        overridden: firmwareGateOverridden,
+      },
+      limits: prefs.limits,
+      calibration: prefs.export.calibration,
+      spans: prefs.commission.spans,
+      repeatability: { readings: prefs.commission.passes, thresholdMm: prefs.commission.thresholdMm },
+      lensMotors: prefs.lens.motors,
+      triggerDevice: backends.get("serial")?.describe() ?? null,
+      log: extra?.log ?? [],
+      notes: extra?.notes ?? "",
+    });
+    const r = await dialog.showSaveDialog(win, {
+      defaultPath: `graffik-bringup-${new Date().toISOString().slice(0, 10)}.md`,
+      filters: [{ name: "Markdown", extensions: ["md"] }],
+    });
+    if (r.canceled || !r.filePath) return null;
+    await fs.writeFile(r.filePath, md, "utf-8");
+    return { path: r.filePath, bytes: md.length };
+  } catch (err) {
+    throw new Error(reportFailure(win, "Bring-up report", err));
+  }
+});
 
 /* ------------------------------------------------------------------
    Commissioning (ADR-0020) — measuring the rig instead of guessing it

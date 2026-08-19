@@ -152,6 +152,7 @@ if (!window.nmx) {
     lensLibraryDelete: async () => 0,
     lensLibraryExport: async () => null,
     lensLibraryImport: async () => null,
+    bringUpReport: async () => ({ path: "/tmp/preview.md", bytes: 0 }),
     diagnose: async () => ({
       probes: [{ address: 3, answered: false, firmware: null, bytesSeen: 0 }],
       answeringAddress: null, firmware: null, bytesSeen: 0, verdict: "silence",
@@ -1692,6 +1693,17 @@ $("rigAddPass").onclick = async () => {
 };
 
 $("rigClearPasses").onclick = async () => { await window.nmx.commissionPass(null); await refreshRig(); };
+
+$("rigReport").onclick = async () => {
+  try {
+    /* The pass log is the renderer's — it is what actually happened, in order,
+       and main has never seen it. Newest first, verbatim: on a first bring-up
+       nobody yet knows which line mattered. */
+    const log = [...$("passlog").children].map((el) => el.textContent.trim()).slice(0, 200);
+    const r = await window.nmx.bringUpReport({ log, notes: $("rigNotes").value.trim() });
+    if (r) status(`Bring-up report written to ${r.path.replace(/^.*\//, "")} (${r.bytes} bytes).`);
+  } catch (e) { status("Report failed: " + e.message); }
+};
 
 /* ---- the lens library: marks belong to a LENS, not a move (ADR-0019) ---- */
 

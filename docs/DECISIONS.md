@@ -210,6 +210,19 @@ Owner said hardware lands in two days. That changes what is worth building: the 
 - Deliberately NOT done: auto-connecting to whatever address answers. Convenient, and it hides a rig configuration the operator should know about — two controllers silently adopting addresses is a much worse afternoon than one clear message.
 - 324 core tests · 19 firmware checks · protocol parity.
 
+## 2026-08-19 (v0.16 — creep, and a report that leaves the room · ADR-0023)
+
+Two last things aimed at the session in two days. Both only matter on a first bring-up, which is exactly why they are easy to leave undone and expensive to leave undone.
+
+- **An axis nobody has taught jogs at 500 steps/s.** ADR-0013 made soft limits un-bypassable and cannot help with the *first* jog, because **limits are taught by jogging to them** — so the procedure necessarily runs limit-less at the moment the operator knows least about the machine. A slow collision is a recoverable noise; a fast one bends a rail or drops a camera off a head. Every motion-control operator creeps on first motion; the software should default to what a careful person would do anyway.
+- **It self-clears, and there is deliberately no override switch.** Teach either bound and full speed returns — one button press. An override is a thing you leave on by accident, and here the escape hatch is the action you were about to take regardless. Zero passes through uncapped, so nothing about stopping is ever slowed.
+- **The 500 is a judgement, not a measurement.** If it is uselessly slow for teaching limits on a real slider it is simply wrong, and it should change against what the rig does rather than be defended.
+- **A bring-up report.** A hardware session produces facts that exist nowhere else — firmware version, which port answered, travel taught, spans measured, whether five passes returned to the same place, what went wrong and what was done about it — and by default they live in somebody's memory until the next morning. One button, one markdown file.
+- Three rules make it worth reading: **everything unmeasured says "not measured" rather than being omitted** (a report that drops what nobody got to reads like a complete one, and the point is knowing what is still unknown); **warnings are spelled out, not counted** ("1 warning" tells nobody anything); and **measured-but-not-applied is flagged explicitly** — measuring a calibration and never pressing *Use these numbers* is the easiest way to leave a session believing a number is in effect when it is not, and a table with two numbers in it puts the noticing onto the reader.
+- The pass log comes from the **renderer**, verbatim and newest-first: main has never seen it, and on a first bring-up nobody yet knows which line mattered. `bringUpReport` is pure — caller supplies the timestamp — so a session always renders the same bytes.
+- Writing the report caught a reporting gap in itself: a lens motor that is **configured but never calibrated** was being collapsed into "no barrel calibrated". Those are different facts and only one of them tells you what to do next.
+- 340 core tests · 19 firmware checks · protocol parity.
+
 ## Open items
 - **NEXT (software):** sustained-cue tail dragging, cue duplication, a saved cue-preset library. MIDI last, and only on real need (every Node binding is native; Web MIDI would breach ADR-0007).
 - **NEXT (2 days): real NMX contact** — usbserial port, Connect, report firmware version (gate expects v70). Then KF vs classic replay fidelity (ratifies ADR-0006), **tune the soft-limit margins**, and **measure the rig calibration** (ADR-0015 export is untrustworthy until it exists).

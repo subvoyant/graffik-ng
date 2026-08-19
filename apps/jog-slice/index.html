@@ -679,6 +679,19 @@ input[type=text] { font-size: 11.5px; }
         <button id="rigClearPasses">Clear</button>
       </div>
       <div id="rigPasses" style="font-size:10.5px;color:var(--ink-faint);min-height:30px"></div>
+
+      <header class="subhead">Bring-up report</header>
+      <div style="font-size:10.5px;color:var(--ink-faint)">
+        Everything above, plus the firmware version, the taught limits, the lens motors and the pass log,
+        written to one markdown file. The facts from a hardware session only exist in the room they
+        happened in; this is how they leave it.
+      </div>
+      <div class="row">
+        <span class="field" style="flex:1;min-width:0"><label>Notes</label>
+          <input id="rigNotes" type="text" placeholder="belt slipped on pass 3, retensioned" spellcheck="false" style="flex:1;min-width:0" />
+        </span>
+        <button id="rigReport">Write report…</button>
+      </div>
     </div>
   </div>
 </div>
