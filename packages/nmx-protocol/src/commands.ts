@@ -146,6 +146,23 @@ export const general = {
   /** query 118 — the plan type currently latched on the device. */
   queryPlanType: () => gen(118),
   /**
+   * query 119 — has the controller power-cycled since it was last asked?
+   *
+   * **A one-shot latch.** `powerCycled()` returns true the first time it is
+   * called after a power cycle and false thereafter, so the answer is consumed
+   * by whoever reads it first. Ask once per connection, keep the answer, and
+   * never read `false` as "no power cycle" (ADR-0030).
+   */
+  queryPowerCycled: () => gen(119),
+  /**
+   * query 131 — does the controller restore its current position across a power
+   * cycle? Firmware default is **false** (`ee_load_curPos`), which is what makes
+   * a stored step-limit fragile. Set with cmd 30.
+   */
+  queryRestoresPosition: () => gen(131),
+  /** cmd 30 — persist current position across a power cycle (writes EEPROM). */
+  setRestorePosition: (on: boolean) => gen(30, bool(on)),
+  /**
    * query 125 — the classic program's own total run time, ms (`totalProgramTime()`
    * = lead-in + travel + lead-out of the longest enabled motor).
    *

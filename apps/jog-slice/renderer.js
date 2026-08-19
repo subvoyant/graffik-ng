@@ -181,6 +181,10 @@ if (!window.nmx) {
     /* Flight recorder (ADR-0027): the browser preview reports honestly that it
        recorded nothing, rather than synthesising a trace that would make the
        comparison UI look like it worked. */
+    limitStatus: async () => ({ voided: false, origin: { reportedPowerCycle: null, restoresPosition: null },
+      verdict: { trust: "unknown", voided: false, message: "browser preview — no controller was asked" } }),
+    trustLimits: async () => ({ voided: false }),
+    setRestorePosition: async () => { throw new Error("browser preview — no controller"); },
     traceBegin: async () => ({ recording: false, reason: "browser preview — nothing to record" }),
     passSample: async () => ({ state: pct < 100 ? 1 : 0, percent: (pct = Math.min(100, pct + 20)), running: pct < 100 }),
     traceEnd: async () => null,
@@ -446,6 +450,10 @@ $("connect").onclick = async () => {
     status(info.supported
       ? "Connected · Graffik mode on · joystick watchdog armed."
       : `Firmware v${info.firmwareVersion} ≠ verified v70 — programmed moves blocked. Update the NMX, or override at your own risk.`);
+    /* Asked once, on connect, because query 119 is consumed by the first reader
+       (ADR-0030). Shown here rather than logged, because it changes what the
+       rig will let you do. */
+    renderLimitTrust(info.limitTrust, info.origin);
   } catch (e) {
     /* A failed handshake is one symptom with half a dozen causes. Offering the
        doctor at the moment of failure is the only time anybody will run it
@@ -789,6 +797,7 @@ for (const [id, apply] of [["padDead", (v) => padCfg.deadzone = v / 100], ["padC
 
 /* ---------------- soft limits UI ---------------- */
 let limits = [{ min: null, max: null }, { min: null, max: null }, { min: null, max: null }];
+let limTrustState = { verdict: null, origin: null };
 const fmtLim = (v) => (v === null ? "—" : String(Math.round(v)));
 
 function renderLimits() {
@@ -811,6 +820,64 @@ function renderLimits() {
     limits = await window.nmx.clearLimits(+b.dataset.limclr); renderLimits(); render();
   });
 }
+/**
+ * The taught-limit trust banner (ADR-0030).
+ *
+ * A voided limit is not a status chip — it is the app saying the guard rail may
+ * be somewhere else on the rail than the numbers claim. It gets the sentence,
+ * the warning colour, and the two things that resolve it.
+ */
+function renderLimitTrust(verdict, origin) {
+  const host = $("limitTrust");
+  if (!host) return;
+  limTrustState = { verdict, origin };
+  if (!verdict || verdict.trust === "unknown" || verdict.trust === "trusted") { host.hidden = true; return; }
+  host.hidden = false;
+  host.className = "limtrust " + (verdict.voided ? "void" : "fragile");
+  /* Short enough not to wrap in a 245px rail. The sentence is in the dialog —
+     what this line has to do is be impossible to miss and lead there. */
+  host.innerHTML = verdict.voided
+    ? `<b>⚠ Limits not enforced</b><button class="why">Why…</button>`
+    : `<span>Limits are fragile</span><button class="why">Fix…</button>`;
+  host.querySelector(".why").onclick = openLimTrust;
+}
+
+function openLimTrust() {
+  const { verdict, origin } = limTrustState;
+  $("limTrustMsg").textContent = verdict?.message ?? "";
+  const cycled = origin?.reportedPowerCycle;
+  $("limTrustFacts").textContent = [
+    `power cycle reported to us: ${cycled === null ? "not asked" : cycled ? "yes" : "no"}`,
+    cycled === false
+      ? "  (general query 119 is a one-shot latch — whoever reads it first consumes it, so this is not evidence of none)"
+      : null,
+    `restores position across a power cycle: ${origin?.restoresPosition === null ? "not asked" : origin?.restoresPosition ? "yes" : "no"}`,
+  ].filter(Boolean).join("\n");
+  $("limTrustAnyway").style.display = verdict?.voided ? "" : "none";
+  $("limTrustModal").classList.add("open");
+}
+
+$("limTrustAnyway").onclick = async () => {
+  const st = await window.nmx.trustLimits();
+  renderLimitTrust({ ...st.verdict, voided: st.voided, trust: st.voided ? st.verdict.trust : "trusted" }, st.origin);
+  $("limTrustModal").classList.remove("open");
+  status("Taught limits trusted again — on your say-so, not the controller's.");
+  logPass("operator trusted the taught limits after a reported power cycle");
+};
+
+$("limEnableRestore").onclick = async () => {
+  /* Writes the controller's EEPROM — which is why it is a button and not
+     something connect does on your behalf. */
+  try {
+    const st = await window.nmx.setRestorePosition(true);
+    renderLimitTrust(st.verdict, st.origin);
+    status(st.origin?.restoresPosition
+      ? "The NMX will now restore its position across a power cycle — taught limits keep their meaning."
+      : "Asked the NMX to restore position, but it still reports otherwise. Do not rely on the taught limits after a power cycle.");
+    logPass("asked the controller to restore position across a power cycle");
+  } catch (e) { status("Could not set position restore: " + e.message); }
+};
+
 $("limClearAll").onclick = async () => { limits = await window.nmx.clearLimits(null); renderLimits(); render(); status("All soft limits cleared."); };
 
 window.nmx.onLimitHit?.(({ motor, position }) => {

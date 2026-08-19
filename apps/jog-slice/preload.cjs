@@ -122,6 +122,10 @@ contextBridge.exposeInMainWorld("nmx", {
   gotoKfStart: (axes) => ipcRenderer.invoke("nmx:goto-kf-start", axes),
   // the flight recorder (ADR-0027) — passSample replaces the progress poll,
   // because the pass is observed from one place or from two disagreeing ones
+  // limit trust (ADR-0030)
+  limitStatus: () => ipcRenderer.invoke("nmx:limit-status"),
+  trustLimits: () => ipcRenderer.invoke("nmx:trust-limits"),
+  setRestorePosition: (on) => ipcRenderer.invoke("nmx:set-restore-position", on),
   traceBegin: (engine, meta) => ipcRenderer.invoke("nmx:trace-begin", engine, meta),
   passSample: (engine) => ipcRenderer.invoke("nmx:pass-sample", engine),
   traceEnd: (endedBy, expectedMs) => ipcRenderer.invoke("nmx:trace-end", endedBy, expectedMs),

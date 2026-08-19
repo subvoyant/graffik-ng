@@ -186,6 +186,14 @@ input[type=text] { font-size: 11.5px; }
    is right for a one-line chip and turns a three-line verdict into a paragraph
    — a headless render caught exactly that. */
 .traceout { white-space: pre-wrap; line-height: 1.55; }
+/* ONE LINE in the rail — the height budget is spent (see the jog-slice digest),
+   and a five-line paragraph here pushed the pass log off the bottom of the
+   window. The sentence, the facts and the two actions live in the dialog. */
+.limtrust { display: flex; align-items: center; gap: 6px; font-size: 10.5px;
+  border-radius: 4px; padding: 3px 6px; }
+.limtrust.void { border: 1px solid #6b4a12; background: #241c0d; color: #e6c37a; }
+.limtrust.fragile { color: var(--ink-faint); }
+.limtrust .why { margin-left: auto; }
 .trace-row {
   display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; align-items: baseline;
   padding: 5px 0; border-bottom: 1px solid var(--line);
@@ -318,6 +326,7 @@ input[type=text] { font-size: 11.5px; }
     <section class="panel">
       <header>Soft limits <span class="grow"></span><button id="limClearAll" class="clr" style="border:none;background:none">clear all</button></header>
       <div class="body" title="Jog to each end of safe travel, then set. Blocks jog and upload beyond.">
+        <div id="limitTrust" class="limtrust" hidden></div>
         <div id="limits"></div>
       </div>
     </section>
@@ -643,6 +652,28 @@ input[type=text] { font-size: 11.5px; }
       <header class="subhead">Try these, in order</header>
       <ul id="diagSteps" style="margin:0;padding-left:18px;font-size:11px;line-height:1.7"></ul>
       <div id="diagDetail" class="tcread" style="margin-top:4px"></div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="limTrustModal">
+  <div class="sheet">
+    <header>Do the taught limits still mean anything? <span class="grow"></span><button data-close>✕</button></header>
+    <div class="body">
+      <div id="limTrustMsg" style="font-size:11px;line-height:1.6"></div>
+      <header class="subhead">What the controller said</header>
+      <div id="limTrustFacts" class="tcread traceout"></div>
+      <div class="row">
+        <button id="limTrustAnyway">These are still right — trust them</button>
+        <button id="limEnableRestore">Remember position across a power cycle</button>
+      </div>
+      <div style="font-size:10.5px;color:var(--ink-faint)">
+        A taught limit is a <b>step count</b>, and a step count only means a place on the rail relative to the
+        controller's origin. If the NMX power-cycles without restoring position, that origin resets while these
+        numbers do not — so the guard rail moves somewhere else while you still believe in it. Enforcing that is
+        worse than enforcing nothing, which is why a voided limit reads as untaught: the axis goes back to creep
+        speed, and a slow collision is a noise.
+      </div>
     </div>
   </div>
 </div>

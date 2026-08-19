@@ -1,6 +1,6 @@
 # Digest: apps/jog-slice (Electron app)
 
-**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.23) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
+**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.24) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
 
 ## Shape
 
@@ -147,6 +147,16 @@ Layout is a fixed frame — appbar / rail(244px) / stage / statusbar — with **
 - **How to re-verify** (needs Playwright, which the repo does not depend on — this runs outside it): load `index.html` headless, `startPassSweep(...)`, sample `playheadFrame` on every `requestAnimationFrame`, and drive `anchorPassSweep()` every 500 ms with values that **deliberately disagree** with the extrapolation by ±1%. Then check the per-frame velocity for *backwards steps* and *spikes over 3× median*. Disagreeing readings are the case that snaps; agreeing ones prove nothing.
 - Measured: 60 fps, `render()` ≈ 0.74 ms on a six-lane 30 s move, 0 backwards steps, 0 velocity spikes over 3× median. Redrawing less often would have been the obvious wrong fix.
 - `followPlayhead()` pans the view when the sweep leaves the visible range.
+
+### Taught limits and a moving origin (v0.24 — ADR-0030)
+
+- `connect()` asks general **119** and **131** **once**, keeps the answers in `origin`, and computes `limitTrust`. Asking 119 twice throws away the only chance to hear it — it is a one-shot latch.
+- `effectiveLimits()` is what jog and the jog monitor act on: **voided limits read as `NO_LIMITS`**, which re-arms the ADR-0023 creep cap. `prefs.limits` still holds the numbers — nothing is deleted.
+- `nmx:upload-kf` **refuses** while voided. Teaching either bound clears it (`nmx:set-limit-here`), and so does `nmx:trust-limits` — the operator's say-so, on a button.
+- `nmx:set-restore-position` writes the controller's EEPROM and is therefore **only ever a button**, never something connect does on your behalf.
+- The rail gets **one line**; the sentence, the controller's own answers and both actions are in `#limTrustModal`. The first version was a five-line paragraph in the rail that pushed the pass log off the bottom of the window — the height budget is spent, and measuring caught it.
+
+  ![The limit-trust dialog: the controller reported a power cycle and does not restore position, with the two actions that resolve it](../images/limit-trust.png)
 
 ### Plan type (v0.22 — ADR-0028)
 

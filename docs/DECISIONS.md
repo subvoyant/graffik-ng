@@ -342,6 +342,34 @@ So every recorded pass now ends by reading the device's own elapsed and its own 
 
 **That detects the ADR-0028 bug class from the rig rather than from a mode read-back**, which matters more than it sounds: a read-back only catches the cause we already know about. A start delay nobody set on purpose, a firmware variant, or something none of us has thought of shows up here as the same disagreement, in the same sentence. The check is quiet when there is nothing to say, because a line that prints every pass is a line people stop reading.
 
+## 2026-08-19 (v0.24 — a taught limit is a step count, and the origin can move)
+
+Straight out of v0.23's coverage report — the list of commands the firmware answers that we never asked. Three of them read together describe a hole underneath ADR-0013, which is the one guard between a camera package and a mechanical end stop.
+
+- **A taught limit is a step count, and a step count is not a place.** It is a place *relative to the controller's origin*. `ee_load_curPos` **defaults to false** in the firmware — boot only restores `currentPos` when that flag is set — so an NMX unplugged between sessions comes back with its origin reset while our preferences still hold `{min: -12000, max: 40000}`. The app would enforce those numbers against a rail they no longer describe. **The guard rail silently moves, and the operator still believes in it, which is worse than having no limits at all** — no limits at least leaves you careful.
+- **General query 119 is a one-shot latch**, and this shaped the whole design:
+
+  ```c
+  byte powerCycled() {
+    static byte cycled = true;
+    byte response = cycled;
+    cycled = false;
+    return(response);
+  }
+  ```
+
+  Whoever asks first consumes it. So the app asks **exactly once per connection** — asking twice throws away the only chance to hear it — and **a `false` is never phrased as an all-clear**, because the stock app or an earlier session connecting first would have taken it. That is what the `fragile` verdict is for: *"no power cycle was reported to us — but that flag is consumed by whoever reads it first."*
+- **Voided limits are not deleted, they stop being acted on.** The numbers stay on screen; the operator may know perfectly well they are still right. What changes is that the axis reads as **untaught**, which re-arms the ADR-0023 creep cap — and that is not a coincidence: you have just learned you know less than you thought about where the carriage is, which is exactly the moment that cap exists for. A slow collision is a noise.
+- **Teaching a bound clears it**, because teaching a bound *is* the operator stating where the rig is against this origin. Same self-clearing shape as the creep cap, same reason: an override you have to remember to turn off is one you leave on. Or they can say so explicitly, once, on a button — on their say-so, not the controller's.
+- **The app never writes the controller's EEPROM on its own.** Command 30 fixes the fragile case permanently, and it is offered on a button with the sentence next to it. It is somebody else's device, shared with whatever else they run it with, and a tool that quietly changes persistent settings is a tool you stop trusting.
+- **The simulator implements the latch exactly** — true once, false forever after, `restoresPosition` false by default like the firmware. A simulator that answered true every time would have made the app look correct and hidden the entire problem. Hub invariant 23, again.
+
+### The rail height budget bit back, and measuring caught it
+
+The first version of the notice was the full five-line paragraph, in the rail, where the safety statement belongs. It measured 212px and pushed the **pass log off the bottom of the window** — `railScroll: true`. The HUB has said since v0.10 that the rail budget is spent and new material goes in a modal; I wrote it into the rail anyway because it felt too important to hide, which is exactly the reasoning that fills a rail. Now: **one line** in the rail (`⚠ Limits not enforced` + `Why…`), 34px, and the sentence, the controller's own answers and both actions in a dialog. Second attempt at the line wrapped across three rows mid-phrase; the screenshot showed it, the assertion did not.
+
+**Also fixed while in there:** the nmx-protocol digest still listed `withinLimit` / `clampToLimit` in the limits section. The v0.17 dead-export audit deleted both and nobody updated the line. That is the third instance of inventory-and-negative prose rotting while the additive prose stays current — and this time I found it by reading the section I was about to edit, which is the only reliable trigger I have.
+
 ## Open items
 - **NEXT (software):** sustained-cue tail dragging, cue duplication, a saved cue-preset library. MIDI last, and only on real need (every Node binding is native; Web MIDI would breach ADR-0007).
 - **NEXT (hardware, imminent): real NMX contact** — usbserial port, Connect, report firmware version (gate expects v70). Then KF vs classic replay fidelity (ratifies ADR-0006), **tune the soft-limit margins**, and **measure the rig calibration** (ADR-0015 export is untrustworthy until it exists).

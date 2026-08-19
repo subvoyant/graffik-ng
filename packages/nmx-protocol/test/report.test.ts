@@ -135,6 +135,43 @@ describe("the bring-up report", () => {
   });
 });
 
+describe("whether the taught limits still mean anything (ADR-0030)", () => {
+  it("says NOT CHECKED when the controller was never asked", () => {
+    const md = bringUpReport({ at, limits: [untaught, untaught, untaught] });
+    expect(md).toMatch(/Limit trust \*\*not checked\*\*/);
+  });
+
+  it("leads the section with the warning when the limits were not being enforced", () => {
+    const md = bringUpReport({
+      at,
+      limits: [{ min: -100, max: 100 }, untaught, untaught],
+      connection: {
+        port: "/dev/x", firmware: 70, supported: true,
+        origin: { reportedPowerCycle: true, restoresPosition: false },
+        limitTrust: { trust: "void", voided: true, message: "its step origin has moved" },
+      },
+    });
+    const trust = md.indexOf("were not being enforced");
+    const numbers = md.indexOf("Slide");
+    expect(trust).toBeGreaterThan(-1);
+    /* The reader needs to know the numbers are suspect BEFORE reading them. */
+    expect(trust).toBeLessThan(numbers);
+  });
+
+  it("does not let a false power-cycle flag read as evidence of no power cycle", () => {
+    const md = bringUpReport({
+      at,
+      connection: {
+        port: "/dev/x", firmware: 70, supported: true,
+        origin: { reportedPowerCycle: false, restoresPosition: false },
+        limitTrust: { trust: "fragile", voided: false, message: "one unplugged cable away" },
+      },
+    });
+    expect(md).toMatch(/consumed by whoever reads it first/);
+    expect(md).toMatch(/restores position across one: \*\*no\*\*/);
+  });
+});
+
 describe("the plan type is read back, not assumed (ADR-0028)", () => {
   it("says NOT READ BACK when no upload checked it", () => {
     const md = bringUpReport({ at, connection: { port: "/dev/x", firmware: 70, supported: true } });

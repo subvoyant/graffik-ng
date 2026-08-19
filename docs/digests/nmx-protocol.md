@@ -1,6 +1,6 @@
 # Digest: @graffik-ng/nmx-protocol
 
-**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.23) · 378 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
+**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.24) · 390 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
 
 ## packet.ts — codec
 
@@ -160,11 +160,15 @@ The only module that knows what the rig **did** rather than what it was told to 
 - `degreesFromLaser` / `laserAngleWarning` — the field method for rotation (laser on the head, marks on a wall, `atan(offset/distance)`). Assumes the first mark is square to the wall; warns above 25° where that stops being free, and below 5° where the angle is too small to read.
 - `repeatability(readingsMm, thresholdMm)` reports **bias and scatter separately** — a consistent offset is backlash and largely correctable, scatter is lost steps and is not. Refuses to be believed below five passes.
 
-## limits.ts — soft travel limits (ADR-0013)
+## limits.ts — soft travel limits (ADR-0013) + is the origin still the origin? (ADR-0030)
 
 - `AxisLimit {min|null, max|null}`, `Limits` = 3-tuple, `NO_LIMITS`. Untaught bounds never block.
-- `withinLimit` / `clampToLimit` / `isTaught`; **`jogWouldExceed(l,pos,stepsPerSec,lookaheadMs=250)`** projects forward and is direction-aware — motion *away* from a violated bound is always permitted so a rig parked outside limits stays recoverable.
+- `isTaught`; **`jogWouldExceed(l,pos,stepsPerSec,lookaheadMs=250)`** projects forward and is direction-aware — motion *away* from a violated bound is always permitted so a rig parked outside limits stays recoverable.
 - `violationsForFilm(film, limits)` → `LimitViolation[]` (axis, keyIndex, position, bound, limit); `describeViolations()` renders the operator-facing sentence. Called before any upload packet is sent.
+  *(`withinLimit`/`clampToLimit` were listed here until v0.24 — the v0.17 dead-export audit deleted them and this line was not updated. Negative and inventory prose is what rots.)*
+- **`limitTrust(origin, anyTaught)` (ADR-0030)** — a taught limit is a **step count**, and a step count is only a place if the controller's origin holds. General **119** says whether it has power-cycled; general **131** says whether it restores position across one (firmware default: **no**). Power-cycled + no restore ⇒ **`void`**: the caller must treat the axis as untaught, which also re-arms the creep cap below.
+- **Query 119 is a one-shot latch** — `powerCycled()` returns true the first time it is called and false thereafter, so whoever asks first consumes it. Ask **once per connection**, and never phrase a `false` as an all-clear; `fragile` exists to say exactly that.
+- The verdict is pure policy in the core so the app, the report and any future runner say the same thing about the same facts.
 
 ## trigger.ts — cue backends + scheduler (ADR-0016)
 

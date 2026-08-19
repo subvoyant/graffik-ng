@@ -112,6 +112,102 @@ export function describeViolations(v: LimitViolation[]): string {
  */
 export const UNTAUGHT_JOG_CAP = 500;
 
+/* ------------------------------------------------------------------ */
+/* Do these numbers still mean what they meant? (ADR-0030)              */
+/* ------------------------------------------------------------------ */
+
+/** What the controller told us on connect. */
+export interface ControllerOrigin {
+  /**
+   * General query **119** — has the controller power-cycled since it was last
+   * asked?
+   *
+   * **The flag is a one-shot latch**: `powerCycled()` returns true the first
+   * time it is called after a power cycle and false thereafter. Whoever asks
+   * first consumes it. So `false` does not mean "no power cycle" — it means
+   * "not one that we were the first to hear about". `null` for "not asked".
+   */
+  reportedPowerCycle: boolean | null;
+  /**
+   * General query **131** — does the controller restore its current position
+   * across a power cycle? Defaults to **false** in the firmware
+   * (`ee_load_curPos = false`), so most rigs are in the dangerous case.
+   * `null` for "not asked".
+   */
+  restoresPosition: boolean | null;
+}
+
+export type LimitTrust = "trusted" | "void" | "fragile" | "unknown";
+
+export interface LimitTrustVerdict {
+  trust: LimitTrust;
+  /** True when taught bounds must NOT be enforced as if they were taught. */
+  voided: boolean;
+  /** Surfaces verbatim. */
+  message: string;
+}
+
+/**
+ * Whether taught soft limits still describe the physical places they were
+ * taught at.
+ *
+ * A taught limit is a **step count**, and a step count only means a position
+ * relative to the controller's origin. If the NMX power-cycles without
+ * restoring position, that origin resets while our stored numbers do not — so
+ * the guard rail silently moves to somewhere else on the rail. That is worse
+ * than having no limits at all, because the operator believes in it.
+ *
+ * When this returns `voided`, the caller must treat the axis as **untaught**,
+ * which also re-arms the creep cap above. A slow collision is a noise; a fast
+ * one bends a rail — and the whole point of ADR-0023 was that the moment you
+ * know least is the moment to go slowly. Discovering the origin moved puts you
+ * back in exactly that moment.
+ */
+export function limitTrust(o: ControllerOrigin, anyTaught: boolean): LimitTrustVerdict {
+  if (!anyTaught) {
+    return { trust: "unknown", voided: false, message: "No travel taught yet — nothing to trust or distrust." };
+  }
+  if (o.reportedPowerCycle === null || o.restoresPosition === null) {
+    return {
+      trust: "unknown",
+      voided: false,
+      message:
+        "The controller was not asked whether it has been power-cycled, so whether the taught limits still " +
+        "point at the same places on the rail is unknown. Reconnect to ask.",
+    };
+  }
+  if (o.reportedPowerCycle && !o.restoresPosition) {
+    return {
+      trust: "void",
+      voided: true,
+      message:
+        "The controller reports it has been power-cycled and it does NOT restore position across one, so its " +
+        "step origin has moved while the taught limits have not. Those numbers now describe different places " +
+        "on the rail. They are no longer enforced — re-teach both bounds, or say explicitly that they are " +
+        "still right.",
+    };
+  }
+  if (o.reportedPowerCycle && o.restoresPosition) {
+    return {
+      trust: "trusted",
+      voided: false,
+      message: "The controller has been power-cycled, but it restores position across one, so the taught limits still hold.",
+    };
+  }
+  if (!o.restoresPosition) {
+    return {
+      trust: "fragile",
+      voided: false,
+      message:
+        "No power cycle was reported to us — but that flag is consumed by whoever reads it first, so another " +
+        "app connecting before us would have taken it. This controller does not restore position across a " +
+        "power cycle, so the taught limits are one unplugged cable away from meaning nothing. Turning on " +
+        "position restore is the fix.",
+    };
+  }
+  return { trust: "trusted", voided: false, message: "Position survives a power cycle on this controller; the taught limits hold." };
+}
+
 export interface CappedJog {
   stepsPerSec: number;
   capped: boolean;

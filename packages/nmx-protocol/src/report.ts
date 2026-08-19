@@ -32,6 +32,10 @@ export interface BringUpState {
     overridden?: boolean;
     /** Plan type read BACK off the device (general query 118), not what we sent. */
     planType?: number | null;
+    /** What the controller said about its own origin (ADR-0030). */
+    origin?: { reportedPowerCycle: boolean | null; restoresPosition: boolean | null };
+    /** Verdict on whether the taught limits still mean what they meant. */
+    limitTrust?: { trust: string; voided: boolean; message: string };
   };
   limits?: AxisLimit[];
   calibration?: Record<string, number | undefined>;
@@ -106,6 +110,21 @@ export function bringUpReport(s: BringUpState): string {
   L.push("");
 
   L.push(`## Soft limits (taught by jogging)`);
+  /* Printed BEFORE the numbers, because whether the numbers mean anything is
+     the first thing a reader needs (ADR-0030). */
+  if (c?.limitTrust) {
+    const t = c.limitTrust;
+    L.push(t.voided ? `- ⚠ **The taught limits below were not being enforced.** ${t.message}` : `- ${t.message}`);
+    const o = c.origin;
+    if (o) {
+      L.push(
+        `- Controller reported a power cycle: ${o.reportedPowerCycle === null ? "**not asked**" : o.reportedPowerCycle ? "yes" : "no — but general query 119 is consumed by whoever reads it first, so this is not evidence of none"}` +
+        ` · restores position across one: ${o.restoresPosition === null ? "**not asked**" : o.restoresPosition ? "yes" : "**no**"}`,
+      );
+    }
+  } else {
+    L.push(`- Limit trust **not checked** — the controller was never asked whether it has been power-cycled.`);
+  }
   const lim = s.limits ?? [];
   if (!lim.length || !lim.some(isTaught)) L.push(`- **Not taught.** Nothing constrains travel yet.`);
   else {

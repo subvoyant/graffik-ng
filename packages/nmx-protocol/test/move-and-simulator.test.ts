@@ -225,3 +225,25 @@ describe("plan type survives the round trip (ADR-0028)", () => {
     expect((await client.query(general.queryPlanType())).value).toBe(PLAN_TYPE.contTimelapse);
   });
 });
+
+describe("the power-cycle flag is a one-shot latch (ADR-0030)", () => {
+  it("the simulator consumes it exactly like the firmware does", async () => {
+    const sim = new SimulatedNmx();
+    const client = new NmxClient(sim);
+    await handshake(client);
+    /* First reader gets the truth. */
+    expect((await client.query(general.queryPowerCycled())).value).toBe(1);
+    /* Everyone after gets a zero that means nothing. A simulator that kept
+       answering 1 would make the app look right and hide the whole problem. */
+    expect((await client.query(general.queryPowerCycled())).value).toBe(0);
+  });
+
+  it("position restore is off by default, matching the firmware's ee_load_curPos", async () => {
+    const sim = new SimulatedNmx();
+    const client = new NmxClient(sim);
+    await handshake(client);
+    expect((await client.query(general.queryRestoresPosition())).value).toBe(0);
+    await client.send(general.setRestorePosition(true));
+    expect((await client.query(general.queryRestoresPosition())).value).toBe(1);
+  });
+});

@@ -25,7 +25,7 @@ import {
   validateLensLibraryEntry, lensLibraryId,
   fitCalibration, diagnoseCalibration, repeatability,
   probeNmx, judgePorts, noUsablePortAdvice,
-  capUntaughtJog, bringUpReport, PLAN_TYPE,
+  capUntaughtJog, bringUpReport, PLAN_TYPE, limitTrust,
   newTrace, addSample, traceCoverage, compareTraces, deviationFromPlan, traceToCsv, timingCheck,
   NO_LIMITS, isTaught, jogWouldExceed, violationsForFilm, describeViolations,
 } from "@graffik-ng/nmx-protocol";
@@ -216,9 +216,37 @@ async function connect(portPath) {
   await client.send(general.setJoystickWatchdog(true));
   firmwareVersion = v.value;
   firmwareGateOverridden = false;
+
+  /* Ask ONCE per connection, and keep the answer (ADR-0030).
+     Query 119 is a one-shot latch — the firmware's `powerCycled()` returns true
+     the first time it is called after a power cycle and false thereafter — so
+     asking twice throws away the only chance to hear it, and asking late lets
+     another app consume it first. */
+  origin = { reportedPowerCycle: null, restoresPosition: null };
+  try { origin.reportedPowerCycle = Boolean((await client.query(general.queryPowerCycled())).value); } catch { /* stays null */ }
+  try { origin.restoresPosition = Boolean((await client.query(general.queryRestoresPosition())).value); } catch { /* stays null */ }
+  const verdict = limitTrust(origin, prefs.limits.some(isTaught));
+  /* Voided means the stored step numbers point somewhere else on the rail now.
+     Not deleted — the operator may know they are still right — but not enforced
+     as taught either, which also re-arms the ADR-0023 creep cap. */
+  limitsVoided = verdict.voided;
+
   prefs.lastPort = portPath; savePrefs();
-  return { firmwareVersion, supported: firmwareVersion === SUPPORTED_FIRMWARE };
+  return {
+    firmwareVersion,
+    supported: firmwareVersion === SUPPORTED_FIRMWARE,
+    origin,
+    limitTrust: verdict,
+  };
 }
+
+/** What the controller said about its own origin, this connection. */
+let origin = { reportedPowerCycle: null, restoresPosition: null };
+/** True while taught limits must not be enforced as taught (ADR-0030). */
+let limitsVoided = false;
+
+/** The limits as they may be ACTED on — voided ones read as untaught. */
+const effectiveLimits = () => (limitsVoided ? structuredClone(NO_LIMITS) : prefs.limits);
 
 async function disconnect() {
   stopJogMonitor();
@@ -261,7 +289,7 @@ function ensureJogMonitor(win) {
   jogMonitor = setInterval(async () => {
     if (!client || activeJogs.size === 0) return;
     for (const [motor, speed] of [...activeJogs]) {
-      const lim = prefs.limits[motor - 1];
+      const lim = effectiveLimits()[motor - 1];
       if (!lim || !isTaught(lim)) continue;
       try {
         const res = await client.query(motors.queryPosition(motor));
@@ -352,9 +380,42 @@ ipcMain.handle("nmx:set-limit-here", async (_e, motor, bound) => {
   const res = await requireClient().query(motors.queryPosition(motor));
   const pos = Math.round(Number(res.value));
   prefs.limits[motor - 1] = { ...prefs.limits[motor - 1], [bound]: pos };
+  /* Teaching a bound is the operator saying where the rig IS, right now, against
+     this origin. That answers the question voiding asked, so it clears — the
+     same self-clearing shape as the creep cap (ADR-0023), and for the same
+     reason: an override you have to remember to turn off is one you leave on. */
+  limitsVoided = false;
   savePrefs();
   return prefs.limits;
 });
+/**
+ * Ask the controller to remember its position across a power cycle.
+ *
+ * This writes the NMX's EEPROM, so it happens on an explicit button and never
+ * silently on connect — it is somebody else's device, and a tool that quietly
+ * changes persistent settings is a tool you stop trusting. Fixes the fragile
+ * case at the root: with position restored, a taught step limit keeps meaning
+ * the same place on the rail.
+ */
+ipcMain.handle("nmx:set-restore-position", async (_e, on) => {
+  const c = requireClient();
+  await c.send(general.setRestorePosition(Boolean(on)));
+  try { origin.restoresPosition = Boolean((await c.query(general.queryRestoresPosition())).value); }
+  catch { origin.restoresPosition = null; }
+  return limitStatus();
+});
+
+/** The operator saying "I know it power-cycled; these are still right." */
+ipcMain.handle("nmx:trust-limits", () => { limitsVoided = false; return limitStatus(); });
+ipcMain.handle("nmx:limit-status", () => limitStatus());
+function limitStatus() {
+  return {
+    voided: limitsVoided,
+    origin,
+    verdict: limitTrust(origin, prefs.limits.some(isTaught)),
+  };
+}
+
 ipcMain.handle("nmx:clear-limits", (_e, motor) => {
   if (motor) prefs.limits[motor - 1] = { min: null, max: null };
   else prefs.limits = structuredClone(NO_LIMITS);
@@ -372,7 +433,13 @@ ipcMain.handle("nmx:enable-motors", async () => {
 ipcMain.handle("nmx:jog", async (e, motor, stepsPerSec) => {
   const c = requireClient();
   const clamped = Math.max(-MAX_JOG_SPEED, Math.min(MAX_JOG_SPEED, stepsPerSec));
-  const lim = prefs.limits[motor - 1] ?? { min: null, max: null };
+  /* Voided limits read as untaught here — deliberately (ADR-0030). Enforcing a
+     step number whose origin has moved is worse than enforcing nothing, because
+     it puts the guard rail somewhere else on the rail while the operator still
+     believes in it. Reading them as untaught also re-arms the creep cap below,
+     which is the correct fallback: you have just learned you know less than you
+     thought about where the carriage is. */
+  const lim = effectiveLimits()[motor - 1] ?? { min: null, max: null };
 
   /* An axis nobody has taught gets a creep cap (ADR-0023). The first jog on a
      new rig necessarily happens before any limits exist — limits are taught BY
@@ -469,6 +536,13 @@ ipcMain.handle("nmx:preview-move", (_e, film, sampleCount = 140) => {
 ipcMain.handle("nmx:upload-kf", async (_e, film) => {
   const c = requireProgrammedMovesAllowed();
   // Nothing reaches the controller before the whole move is checked (ADR-0013).
+  if (limitsVoided) {
+    throw new Error(
+      "Taught limits are not trusted: the controller reports it has been power-cycled and does not restore " +
+      "position, so those numbers describe different places on the rail now. Re-teach both bounds, or trust " +
+      "them explicitly, before uploading a programmed move (ADR-0030).",
+    );
+  }
   const v = violationsForFilm(film, prefs.limits);
   if (v.length) throw new Error("Soft limits: " + describeViolations(v));
   /* The key-frame path never set a plan type at all, so a KF pass ran under
@@ -993,6 +1067,8 @@ ipcMain.handle("nmx:bringup-report", async (e, extra) => {
       appVersion: app.getVersion(),
       connection: {
         planType: latchedPlanType,
+        origin,
+        limitTrust: limitTrust(origin, prefs.limits.some(isTaught)),
         /* `prefs.lastPort` is written on every successful connect, so it is
            the record of what actually answered — a disconnect must not erase
            the report's memory of the session. */

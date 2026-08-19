@@ -35,6 +35,9 @@ export class SimulatedNmx implements PortLike {
   joystickMode = false;
   watchdog = false;
   programMode = 0;
+  /** Fresh boot, exactly like a real one — and like the firmware, false by default. */
+  powerCycled = true;
+  restoresPosition = false;
   startDelayMs = 0;
   running = false;
   progressPercent = 0;
@@ -180,6 +183,7 @@ export class SimulatedNmx implements PortLike {
       case 14: this.watchdog = p.payload[0] !== 0; return this.ack();
       case 21: this.startDelayMs = this.u32(p.payload); return this.ack();
       case 22: this.programMode = p.payload[0]; return this.ack();
+      case 30: this.restoresPosition = p.payload[0] !== 0; return this.ack();
       case 23: this.joystickMode = p.payload[0] !== 0; return this.ack();
       case 25: this.positions = [...this.startPoints]; return this.ack();
       case 26: this.startPoints = [...this.positions]; return this.ack();
@@ -190,6 +194,11 @@ export class SimulatedNmx implements PortLike {
          point of reading it back is to catch a pass running under a plan type
          somebody else set (PLAN_TYPE — the denominator of percent depends on it). */
       case 118: return this.typedByte(this.programMode);
+      /* One-shot, exactly like the firmware: whoever asks first consumes it.
+         A simulator that answered true every time would make the app look like
+         it worked and hide the subtlety the ADR is about. */
+      case 119: { const r = this.powerCycled; this.powerCycled = false; return this.typedByte(r ? 1 : 0); }
+      case 131: return this.typedByte(this.restoresPosition ? 1 : 0);
       case 123: {
         // animate: each poll advances the "move" so demo passes complete
         if (this.running) {

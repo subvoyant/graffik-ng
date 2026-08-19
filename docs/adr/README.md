@@ -34,3 +34,4 @@ Immutable decision records. Accepted = in force. Supersede, never edit. See ADR-
 | [0027](0027-the-flight-recorder.md) | The flight recorder: record every pass, compare at matched percent, state the resolution floor | Accepted (unverified against hardware) |
 | [0028](0028-plan-type-and-what-percent-means.md) | Plan type is CONT_VID: it decides what percent complete is divided by | Accepted (unverified against hardware) |
 | [0029](0029-vocabulary-audit-against-the-dispatch.md) | The command vocabulary is checked against the firmware dispatch, in CI | Accepted |
+| [0030](0030-taught-limits-and-a-moving-origin.md) | A taught limit is a step count; if the controller's origin moves, it is void | Accepted (unverified against hardware) |

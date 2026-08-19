@@ -41,6 +41,20 @@ command numbers genuinely differ between firmware eras. Update the controller fr
 Dynamic Perception's `nanoMoCo_Firmware` repo before proceeding. Overriding the
 gate is possible but means every command number is a guess.
 
+### Before Phase 2 — check what the controller says about its own origin (ADR-0030)
+
+On connect the app asks whether the NMX has power-cycled and whether it restores
+position across one. Two things to confirm on the first session:
+
+1. **Connect twice without power-cycling.** The second connection must report
+   *no* power cycle. If it reports *yes* every time, the latch is not behaving as
+   the source says and the app will void your limits on every connect — tiresome
+   enough to be ignored, which is its own hazard. Say so in the log.
+2. **Turn on position restore** (the button in the limit-trust dialog) before
+   teaching any limits, then power-cycle the NMX deliberately and confirm the
+   reported position survives. Until that is verified, treat every taught limit
+   as good only for the session it was taught in.
+
 ## Phase 2 — first motion (~15 min)
 
 Do this with **one axis at a time** and a hand near STOP ALL.
