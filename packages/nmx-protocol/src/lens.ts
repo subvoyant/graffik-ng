@@ -399,3 +399,136 @@ export const lensToleranceForSteps = (steps: number): number =>
  * to be finer than any plausible lens motor rather than tuned to one.
  */
 export const DEFAULT_LENS_TOLERANCE_UNITS = 32;
+
+/* ==================================================================
+   The lens library (ADR-0019)
+
+   Marks belong to a LENS, not to a move. A 35 mm prime has the same
+   witness marks on Tuesday as it had on Monday, and a focus puller
+   who has to re-mark it for every setup will stop marking it. Preston
+   stores 150 lenses on the hand unit for exactly this reason.
+   ================================================================== */
+
+export interface LensLibraryEntry {
+  /** Stable across renames and across machines — this is what merge matches on. */
+  id: string;
+  name: string;
+  kind: LensAxisKind;
+  marks: LensMark[];
+  /** Serial number, who marked it, on what body, at what temperature. */
+  notes?: string;
+  /** ISO date, for "which of these two did I mark last week". */
+  savedAt?: string;
+}
+
+export const LENS_LIBRARY_FORMAT = "graffik-ng.lenses";
+export const LENS_LIBRARY_VERSION = 1;
+
+export interface LensLibraryFile {
+  format: typeof LENS_LIBRARY_FORMAT;
+  version: number;
+  lenses: LensLibraryEntry[];
+}
+
+export function validateLensLibraryEntry(e: LensLibraryEntry): void {
+  if (!e || typeof e !== "object") throw new Error("lens entry must be an object");
+  if (typeof e.id !== "string" || !e.id) throw new Error("lens entry needs an id");
+  if (typeof e.name !== "string" || !e.name.trim()) throw new Error(`lens ${e.id} needs a name`);
+  if (!LENS_KINDS.includes(e.kind)) throw new Error(`lens "${e.name}": unknown axis kind ${String(e.kind)}`);
+  /* Reuse the map validator rather than write a second one — a library entry
+     that would not be accepted as a map is a library entry that cannot be
+     used, and finding that out at apply time is finding out too late. */
+  validateLensMap({ name: e.name, kind: e.kind, marks: e.marks });
+}
+
+export function validateLensLibrary(file: LensLibraryFile): void {
+  if (!file || typeof file !== "object") throw new Error("not a lens library file");
+  if (file.format !== LENS_LIBRARY_FORMAT) {
+    throw new Error(`not a Graffik lens library (format: ${String(file.format)})`);
+  }
+  if (!Number.isFinite(file.version) || file.version < 1) throw new Error("missing/invalid version");
+  if (file.version > LENS_LIBRARY_VERSION) {
+    throw new Error(`lens library version ${file.version} is newer than this app understands (${LENS_LIBRARY_VERSION})`);
+  }
+  if (!Array.isArray(file.lenses)) throw new Error("lens library has no lenses array");
+  const seen = new Set<string>();
+  for (const e of file.lenses) {
+    validateLensLibraryEntry(e);
+    if (seen.has(e.id)) throw new Error(`duplicate lens id in library: ${e.id}`);
+    seen.add(e.id);
+  }
+}
+
+export function serializeLensLibrary(lenses: LensLibraryEntry[]): string {
+  const file: LensLibraryFile = { format: LENS_LIBRARY_FORMAT, version: LENS_LIBRARY_VERSION, lenses };
+  validateLensLibrary(file);
+  return JSON.stringify(file, null, 2);
+}
+
+export function parseLensLibrary(text: string): LensLibraryEntry[] {
+  let raw: unknown;
+  try { raw = JSON.parse(text); }
+  catch { throw new Error("lens library file is not valid JSON"); }
+  const file = raw as LensLibraryFile;
+  validateLensLibrary(file);
+  return file.lenses;
+}
+
+/** A library entry, ready to hang on an axis. */
+export const lensEntryToMap = (e: LensLibraryEntry): LensMap => ({
+  name: e.name,
+  kind: e.kind,
+  marks: e.marks.map((m) => ({ ...m })),
+  ...(e.notes === undefined ? {} : { notes: e.notes }),
+});
+
+/** The map an operator just marked, ready to keep. */
+export const lensMapToEntry = (map: LensMap, id: string, savedAt?: string): LensLibraryEntry => ({
+  id,
+  name: map.name,
+  kind: map.kind,
+  marks: map.marks.map((m) => ({ ...m })),
+  ...(map.notes === undefined ? {} : { notes: map.notes }),
+  ...(savedAt === undefined ? {} : { savedAt }),
+});
+
+export interface LensLibraryMerge {
+  merged: LensLibraryEntry[];
+  added: string[];
+  updated: string[];
+  /** Entries the incoming file could not contribute, and why. */
+  rejected: Array<{ name: string; reason: string }>;
+}
+
+/**
+ * Merge an imported library into the one already held.
+ *
+ * Matched on **id**, not name: two people can call a lens "35mm" and mean
+ * different glass, and the same lens can be renamed without becoming a
+ * different lens. Names are for humans; ids are for merging.
+ *
+ * A bad entry does NOT sink the import. Someone hands you a library with one
+ * malformed lens in it, and refusing all 149 good ones because of it helps
+ * nobody — so the survivors go in and the casualties are reported by name.
+ */
+export function mergeLensLibrary(existing: LensLibraryEntry[], incoming: LensLibraryEntry[]): LensLibraryMerge {
+  const byId = new Map(existing.map((e) => [e.id, e]));
+  const added: string[] = [], updated: string[] = [], rejected: LensLibraryMerge["rejected"] = [];
+  for (const e of incoming) {
+    try { validateLensLibraryEntry(e); }
+    catch (err) { rejected.push({ name: e?.name ?? "(unnamed)", reason: (err as Error).message }); continue; }
+    (byId.has(e.id) ? updated : added).push(e.name);
+    byId.set(e.id, e);
+  }
+  const merged = [...byId.values()].sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
+  return { merged, added, updated, rejected };
+}
+
+/**
+ * An id for a lens marked on this machine. Not a UUID: no crypto in a
+ * zero-dependency core, and this only has to be unique enough that two people
+ * marking two different lenses on two machines do not collide. Caller supplies
+ * the entropy, so the function stays pure and testable.
+ */
+export const lensLibraryId = (kind: LensAxisKind, name: string, salt: string): string =>
+  `${kind}-${name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 32) || "lens"}-${salt}`;

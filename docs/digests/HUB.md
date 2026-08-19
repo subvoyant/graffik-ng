@@ -10,19 +10,19 @@
 graffik-ng/
 ├── packages/nmx-protocol/     # headless core — ALL protocol knowledge (zero runtime deps)
 │   └── src/ packet · commands · client · spline · move · film · limits · timecode · export3d · trigger · dmx · osc · lens · simulator
-│   └── test/ 248 tests: byte-exact vs firmware samples + e2e vs simulator + timecode/DF + export
+│   └── test/ 264 tests: byte-exact vs firmware samples + e2e vs simulator + timecode/DF + export
 ├── packages/nmx-cli/          # headless runner: ports/info/run/stop for .graffik files
 ├── apps/jog-slice/            # Electron app (main.js / preload.cjs / index.html / renderer.js)
 │                              # jog + configurable gamepad · timeline editor (zoom/undo/select/nudge)
 │                              # 2-point pass · keyframe pass · camera trigger · pass log + cue countdown
 │                              # soft limits · prefs · move files · 3D export · cue lane + triggers · fw gate
-│                              # lens lanes (focus/iris/zoom) + lens maps + motor calibration
+│                              # lens lanes (focus/iris/zoom) + lens library + motor calibration
 │                              # `npm run dist` → unsigned .dmg (electron-builder)
 ├── firmware/graffik-trig/     # reference Arduino firmware (GRAFFIK-TRIG v2: cues + lens axes)
 │   └── test/ host shim + protocol-parity check vs the TS simulator — both in CI
 ├── scripts/check.sh           # everything CI runs, one command — use this, not a pasted block
 ├── .github/workflows/ci.yml   # test matrix (ubuntu+macos, `npm ci`) + firmware + parity + dmg on main
-└── docs/ adr/ (why, 0000-0018) + digests/ (how, you are here)
+└── docs/ adr/ (why, 0000-0019) + digests/ (how, you are here)
     + DECISIONS.md (running session log) + DEVELOPMENT.md (setup/daily-loop/troubleshooting)
     + HARDWARE-BRINGUP.md (first-contact + repeatability + rig calibration) + images/
 ```
@@ -52,7 +52,8 @@ Dataflow: renderer (vanilla JS UI) → `window.nmx` (preload contextBridge) → 
 19. Lens curves are **uploaded and run device-side** on GRAFFIK-TRIG **protocol v2** (ADR-0018) — same board, same `GO` as the cues. The host sends **samples, not keys** (no second solver — ADR-0009), decimated under a stated vertical error bound; **the firmware may only interpolate linearly**, because that is what the bound is stated against.
 20. **An un-homed lens axis refuses to run.** A stepper is open loop; `LCAL` against both mechanical stops is the only thing that makes a position mean anything, and the board — not the host — is the only party that knows whether it has homed since power-up. A remembered travel figure is a pre-flight hint, never a claim.
 21. **`ABORT` stops lens motion and HOLDS.** Never homes, never releases, drivers stay enabled. A free-wheeling focus ring under a heavy lens is how you lose the lens.
-22. **The simulated device must be exactly as strict as the firmware.** A simulator more permissive than the board means every test passes and the rig fails; `firmware/graffik-trig/test/parity.mjs` enforces it in CI and has already caught one divergence.
+22. **Marks belong to a LENS, not to a move** (ADR-0019). The library is merged by **id**, never by name; import never replaces; forgetting a lens never unmarks a move already using it.
+23. **The simulated device must be exactly as strict as the firmware.** A simulator more permissive than the board means every test passes and the rig fails; `firmware/graffik-trig/test/parity.mjs` enforces it in CI and has already caught one divergence.
 
 ## Digest index
 
@@ -77,7 +78,8 @@ Dataflow: renderer (vanilla JS UI) → `window.nmx` (preload contextBridge) → 
 - **Done (v0.11, 2026-08-18):** **Lens axes are driven** (ADR-0018) — GRAFFIK-TRIG **protocol v2** on the same board as the cues, started by the same `GO`. A v1 cue board still connects and says honestly that it has no lens axes. The host sends **samples, not keys** (the spline stays in the tested core — ADR-0009), decimated by Douglas–Peucker with a **vertical** error metric: 1731 dense points become ~132 at a half-motor-step bound, 2.4 kB, 0.2 s of upload, and nothing observable given up. Uploads are chunked with `LSYNC` and cross-checked against `ARM`'s own count, so a truncated focus pull is refused rather than run. `LCAL` drives both stops and is **mandatory** — `GO` answers `LERR` on an axis that has not homed since power-up, because open-loop position means nothing without a reference. `ABORT` stops and **holds**. One pre-flight gate now covers cues and lens speeds together.
 - **Schema v4, one day after v3:** `lensAxes[].invert` was wrong in v3 — motor handedness is a fact about a rig, and a move file carrying it reverses somebody else's focus pull. It moved to preferences; the migration strips it and writes the fact into `notes` (ADR-0018 §5). Display, export and the wire program all got simpler, which is usually the sign.
 - **The firmware is no longer unverified.** Two checks, both in CI: a **host exercise** (shimmed `Arduino.h`, fake clock, a simulated barrel with hard stops that moves on STEP edges per the DIR pin) and a **protocol parity check** feeding one script to both the TS simulator and the C++ firmware and diffing the replies. Between them they found two real bugs on first run — `seekStop` backing off a stop in the wrong direction (every calibration would have reported zero travel), and the simulator accepting an axis index the board rejects.
-- **NEXT (software):** a reusable **per-lens map library** (Preston stores 150; ours still live in the move file), sustained-cue editing (drag the tail), cue duplication, MIDI last since every Node binding is native.
+- **Done (v0.12, 2026-08-19):** **Lens library** (ADR-0019) — marks belong to a lens, not a move, so marking a barrel is done once instead of once per setup. Stored in preferences, picked from a kind-filtered dropdown in ⌾ Lens…, exported/imported as versioned `.graffiklens`. Merge matches on **id** (two people's "35mm" are different glass) and **reports** what it added, updated and rejected; one malformed entry does not sink a 150-lens file. Forgetting a lens never unmarks a move that is using it. 264 tests.
+- **NEXT (software):** sustained-cue editing (drag the tail), cue duplication, a cue-preset library, MIDI last since every Node binding is native.
 - **NEXT (all hardware-gated):** first real-hardware contact — connect NMX, report firmware version (`docs/HARDWARE-BRINGUP.md` Phase 1); KF vs classic replay-fidelity test (ratifies ADR-0006); **tune the soft-limit margins** (250 ms lookahead / 90 ms poll are estimates — Phase 2); measure payload/speed ceilings with the cinema package on the slider; **measure the rig calibration** (steps/mm, steps/deg, nodal offset) — ADR-0015 export is untrustworthy until this exists. **Then Phase 7: the first lens motor** — StallGuard tuning, calibration stability across three runs, measured top speed, and a five-pass repeatability check on the barrel. Hardware-free backlog: tagged release with .dmg, Windows CI job, Apple Developer ID signing/notarization env, gamepad **button** bindings (e-stop on a button).
 - **Rail height budget is spent** — the next always-visible rail panel breaks the no-page-scroll rule. New configuration goes in a modal (see jog-slice digest). **Stage height budget is now spent too**: six tracks (3 motion + 3 lens) at 1440×880 is verified by headless render; a seventh lane needs scrolling tracks, which is a real design change.
 - Cross-session memory also lives in the Claude project docs: `claude/graffik-ng-decisions.md` (running log), `claude/graffik-ng-hub.md` (this hub, mirrored), `claude/phase0-codebase-reality-report.md` (recon).

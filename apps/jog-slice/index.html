@@ -519,10 +519,17 @@ input[type=text] { font-size: 11.5px; }
     <header>Lens marks <span class="grow"></span><button data-close>✕</button></header>
     <div class="body">
       <div class="row">
-        <span class="field" style="flex:1"><label>Lens</label>
-          <input id="lensMapName" type="text" placeholder="e.g. Zeiss CP.3 32mm" spellcheck="false" style="flex:1" />
+        <span class="field" style="flex:1;min-width:0"><label>Lens</label>
+          <input id="lensMapName" type="text" placeholder="e.g. Zeiss CP.3 32mm" spellcheck="false" style="flex:1;min-width:0" />
         </span>
         <span id="lensMapKind" class="chip dim">focus</span>
+      </div>
+      <div class="row">
+        <span class="field" style="flex:1;min-width:0"><label>Library</label>
+          <select id="lensLibPick" style="flex:1;min-width:0"></select>
+        </span>
+        <button id="lensLibSave" title="Keep these marks against this lens, for every future move">Keep</button>
+        <button id="lensLibDelete" disabled title="Remove this lens from the library — the lane keeps its marks">Forget</button>
       </div>
       <div style="font-size:10.5px;color:var(--ink-faint)">
         A lens motor knows only <b>how far along the barrel it is</b> — 0 to 100% of travel. Marks turn
@@ -567,6 +574,8 @@ input[type=text] { font-size: 11.5px; }
       <div class="row">
         <button id="lensRemoveAxis" title="Remove this lane from the move">Remove lane</button>
         <span class="grow"></span>
+        <button id="lensLibImport" title="Merge a library file into this one — never replaces">Import…</button>
+        <button id="lensLibExport" title="Write the whole library to a file">Export…</button>
       </div>
     </div>
   </div>

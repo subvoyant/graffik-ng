@@ -119,6 +119,11 @@ if (!window.nmx) {
       densePoints: 0, uploadSeconds: 0, toleranceUnits: 32, infeasible: [],
     }),
     lensUpload: async () => ({ points: 0, axes: [] }),
+    lensLibrary: async () => [],
+    lensLibrarySave: async (e) => ({ ...e, id: e.id || "preview-1" }),
+    lensLibraryDelete: async () => 0,
+    lensLibraryExport: async () => null,
+    lensLibraryImport: async () => null,
     exportFormats: async () => [
       { id: "usda", label: "OpenUSD (.usda)", ext: "usda", note: "Cinema 4D, Blender, Houdini, Maya, Unreal. Carries its own units and up-axis." },
       { id: "abc", label: "Alembic + FBX (via Blender)", ext: "usda", note: "Writes the .usda plus a Blender script that converts it." },
@@ -1205,6 +1210,7 @@ function renderLensMarks() {
   $("lensMapKind").textContent = ax.kind;
   $("lensMapName").value = ax.map?.name ?? "";
   refreshLensMotor(ax.kind);
+  refreshLensLibrary(ax);
   const unit = ax.kind === "iris" ? "T" : ax.kind === "zoom" ? "mm" : "m";
   const marks = ax.map?.marks ?? [];
   $("lensMarkRows").innerHTML = marks.length
@@ -1241,6 +1247,96 @@ $("lensAddMark").onclick = () => {
 };
 
 $("lensMapName").onchange = () => { const ax = selectedLens() ?? lensAxesOf()[0]; if (ax?.map) { ax.map.name = $("lensMapName").value.trim(); } };
+/* ---- the lens library: marks belong to a LENS, not a move (ADR-0019) ---- */
+
+let lensLib = [];
+/** Which library entry the open dialog is showing, so "Keep" can update it. */
+let lensLibCurrent = null;
+
+async function refreshLensLibrary(ax) {
+  try { lensLib = await window.nmx.lensLibrary(); }
+  catch { lensLib = []; }
+  /* Filtered to this axis: a focus map on an iris lane is not a mistake worth
+     making possible. */
+  const mine = lensLib.filter((e) => e.kind === ax.kind);
+  const sel = $("lensLibPick");
+  sel.innerHTML =
+    `<option value="">${mine.length ? "— pick a saved lens —" : "— library empty —"}</option>` +
+    mine.map((e) => `<option value="${e.id}">${e.name}${e.savedAt ? ` · ${e.savedAt.slice(0, 10)}` : ""}</option>`).join("");
+  /* Keep the selection if the open map came from the library, so "Keep" reads
+     as "update this lens" rather than "make a second copy of it". */
+  const match = mine.find((e) => e.id === lensLibCurrent) ?? mine.find((e) => e.name === ax.map?.name);
+  lensLibCurrent = match?.id ?? null;
+  sel.value = lensLibCurrent ?? "";
+  $("lensLibDelete").disabled = !lensLibCurrent;
+  $("lensLibSave").textContent = lensLibCurrent ? "Update" : "Keep";
+  $("lensLibSave").disabled = !ax.map || (ax.map.marks?.length ?? 0) < 2;
+}
+
+$("lensLibPick").onchange = () => {
+  const ax = selectedLens() ?? lensAxesOf()[0];
+  const entry = lensLib.find((e) => e.id === $("lensLibPick").value);
+  if (!ax || !entry) { lensLibCurrent = null; return refreshLensLibrary(ax ?? lensAxesOf()[0]); }
+  snapshot();                                   // applying a lens is undoable
+  ax.map = { name: entry.name, kind: entry.kind, marks: entry.marks.map((m) => ({ ...m })),
+             ...(entry.notes ? { notes: entry.notes } : {}) };
+  lensLibCurrent = entry.id;
+  renderLensMarks(); refreshLens(); updateInspector(); render();
+  status(`${entry.name} applied to the ${ax.kind} lane — ${entry.marks.length} marks.`);
+};
+
+$("lensLibSave").onclick = async () => {
+  const ax = selectedLens() ?? lensAxesOf()[0];
+  if (!ax?.map) return status("Add at least two marks before keeping this lens.");
+  const name = $("lensMapName").value.trim() || ax.map.name;
+  try {
+    const saved = await window.nmx.lensLibrarySave({
+      id: lensLibCurrent ?? "", name, kind: ax.kind,
+      marks: ax.map.marks.map((m) => ({ ...m })),
+      ...(ax.map.notes ? { notes: ax.map.notes } : {}),
+    });
+    lensLibCurrent = saved.id;
+    ax.map.name = saved.name;
+    await refreshLensLibrary(ax);
+    status(`“${saved.name}” kept — it is now on every move, not just this one.`);
+  } catch (e) { status("Keep lens failed: " + e.message); }
+};
+
+$("lensLibDelete").onclick = async () => {
+  if (!lensLibCurrent) return;
+  const gone = lensLib.find((e) => e.id === lensLibCurrent)?.name ?? "lens";
+  const ax = selectedLens() ?? lensAxesOf()[0];
+  try {
+    await window.nmx.lensLibraryDelete(lensLibCurrent);
+    lensLibCurrent = null;
+    await refreshLensLibrary(ax);
+    /* The lane keeps its marks. Removing a lens from the library must not
+       silently unmark a move that is already using it. */
+    status(`“${gone}” removed from the library — the ${ax.kind} lane keeps its marks.`);
+  } catch (e) { status("Delete failed: " + e.message); }
+};
+
+$("lensLibExport").onclick = async () => {
+  try {
+    const r = await window.nmx.lensLibraryExport();
+    if (r) status(`Exported ${r.count} lens${r.count === 1 ? "" : "es"} to ${r.path.replace(/^.*\//, "")}.`);
+  } catch (e) { status("Export failed: " + e.message); }
+};
+
+$("lensLibImport").onclick = async () => {
+  const ax = selectedLens() ?? lensAxesOf()[0];
+  try {
+    const r = await window.nmx.lensLibraryImport();
+    if (!r) return;
+    await refreshLensLibrary(ax);
+    const bits = [];
+    if (r.added.length) bits.push(`${r.added.length} added`);
+    if (r.updated.length) bits.push(`${r.updated.length} updated`);
+    if (r.rejected.length) bits.push(`${r.rejected.length} rejected (${r.rejected[0].name}: ${r.rejected[0].reason})`);
+    status(`Library merged — ${bits.join(", ") || "nothing new"}; ${r.total} lenses held.`);
+  } catch (e) { status("Import failed: " + e.message); }
+};
+
 /* ---- motor settings: rig config, saved outside the move (ADR-0018) ---- */
 
 let lensDev = null;

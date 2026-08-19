@@ -21,6 +21,8 @@ import {
   DmxTriggerBackend, SimulatedEnttecDevice, OscTriggerBackend, SimulatedDatagram,
   sampleLensAxis, LENS_KINDS,
   buildLensProgram, lensProgramSize, lensFeasibility, LENS_AXIS_INDEX,
+  serializeLensLibrary, parseLensLibrary, mergeLensLibrary,
+  validateLensLibraryEntry, lensLibraryId,
   NO_LIMITS, isTaught, jogWouldExceed, violationsForFilm, describeViolations,
 } from "@graffik-ng/nmx-protocol";
 
@@ -54,6 +56,9 @@ const DEFAULT_PREFS = {
      `steps` is remembered between sessions as a HINT for the feasibility
      pre-flight — it is never treated as homing, because only the board knows
      whether it has seen a mechanical stop since it powered up. */
+  /* Marks belong to a LENS, not to a move (ADR-0019). Kept here so marking a
+     piece of glass is done once, not once per setup. */
+  lensLibrary: [],
   lens: {
     motors: {
       focus: { steps: 0, maxStepsPerSec: 3000, invert: false },
@@ -114,6 +119,12 @@ function loadPrefs() {
         bindings: Array.isArray(raw.triggers?.bindings) ? raw.triggers.bindings : [...DEFAULT_PREFS.triggers.bindings],
         osc: { ...DEFAULT_PREFS.triggers.osc, ...(raw.triggers?.osc ?? {}) },
       },
+      /* Guarded like every other sub-object — `prefs.recent` taught us what an
+         unguarded one costs (v0.7.0). A malformed library must not break the
+         Lens dialog, let alone a save. */
+      lensLibrary: Array.isArray(raw.lensLibrary) ? raw.lensLibrary.filter((e) => {
+        try { validateLensLibraryEntry(e); return true; } catch { return false; }
+      }) : [],
       lens: {
         ...DEFAULT_PREFS.lens, ...(raw.lens ?? {}),
         motors: Object.fromEntries(LENS_KINDS.map((k) => [
@@ -655,6 +666,76 @@ async function declareLensMotors(be, kinds = LENS_KINDS) {
     await be.declareLensAxis({ kind, steps: m.steps, maxStepsPerSec: m.maxStepsPerSec, invert: m.invert });
   }
 }
+
+/* ---- the lens library (ADR-0019) ---- */
+
+ipcMain.handle("nmx:lens-library", () => structuredClone(prefs.lensLibrary));
+
+/**
+ * Save or update a lens. An `id` means "this is the same glass, re-marked";
+ * no id means a new entry. The salt is generated here rather than in the core
+ * so the core stays pure and testable.
+ */
+ipcMain.handle("nmx:lens-library-save", (e, entry) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  try {
+    const id = entry.id || lensLibraryId(entry.kind, entry.name, Math.random().toString(36).slice(2, 8));
+    const saved = { ...entry, id, savedAt: new Date().toISOString() };
+    validateLensLibraryEntry(saved);
+    const i = prefs.lensLibrary.findIndex((x) => x.id === id);
+    if (i >= 0) prefs.lensLibrary[i] = saved; else prefs.lensLibrary.push(saved);
+    prefs.lensLibrary.sort((a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name));
+    savePrefs();
+    return saved;
+  } catch (err) {
+    throw new Error(reportFailure(win, "Save lens", err));
+  }
+});
+
+ipcMain.handle("nmx:lens-library-delete", (_e, id) => {
+  prefs.lensLibrary = prefs.lensLibrary.filter((x) => x.id !== id);
+  savePrefs();
+  return prefs.lensLibrary.length;
+});
+
+/** Export the whole library — glass moves between rigs and between people. */
+ipcMain.handle("nmx:lens-library-export", async (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  try {
+    if (!prefs.lensLibrary.length) throw new Error("the library is empty — nothing to export");
+    const r = await dialog.showSaveDialog(win, {
+      defaultPath: "lenses.graffiklens",
+      filters: [{ name: "Graffik NG Lens Library", extensions: ["graffiklens", "json"] }],
+    });
+    if (r.canceled || !r.filePath) return null;
+    await fs.writeFile(r.filePath, serializeLensLibrary(prefs.lensLibrary), "utf-8");
+    return { path: r.filePath, count: prefs.lensLibrary.length };
+  } catch (err) {
+    throw new Error(reportFailure(win, "Export lens library", err));
+  }
+});
+
+/**
+ * Import and MERGE. Never replace: somebody hands you their library and losing
+ * your own marks in exchange is not an import, it is an accident.
+ */
+ipcMain.handle("nmx:lens-library-import", async (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  try {
+    const r = await dialog.showOpenDialog(win, {
+      properties: ["openFile"],
+      filters: [{ name: "Graffik NG Lens Library", extensions: ["graffiklens", "json"] }],
+    });
+    if (r.canceled || !r.filePaths.length) return null;
+    const incoming = parseLensLibrary(await fs.readFile(r.filePaths[0], "utf-8"));
+    const m = mergeLensLibrary(prefs.lensLibrary, incoming);
+    prefs.lensLibrary = m.merged;
+    savePrefs();
+    return { added: m.added, updated: m.updated, rejected: m.rejected, total: m.merged.length };
+  } catch (err) {
+    throw new Error(reportFailure(win, "Import lens library", err));
+  }
+});
 
 ipcMain.handle("nmx:lens-status", () => {
   const be = lensBackend();

@@ -112,6 +112,12 @@ contextBridge.exposeInMainWorld("nmx", {
   lensCalibrate: (kind) => ipcRenderer.invoke("nmx:lens-calibrate", kind),
   lensSeek: (kind, position) => ipcRenderer.invoke("nmx:lens-seek", kind, position),
   lensCheck: (film) => ipcRenderer.invoke("nmx:lens-check", film),
+  // lens library (ADR-0019)
+  lensLibrary: () => ipcRenderer.invoke("nmx:lens-library"),
+  lensLibrarySave: (entry) => ipcRenderer.invoke("nmx:lens-library-save", entry),
+  lensLibraryDelete: (id) => ipcRenderer.invoke("nmx:lens-library-delete", id),
+  lensLibraryExport: () => ipcRenderer.invoke("nmx:lens-library-export"),
+  lensLibraryImport: () => ipcRenderer.invoke("nmx:lens-library-import"),
   lensUpload: (film) => ipcRenderer.invoke("nmx:lens-upload", film),
   // e-stop
   stopAll: () => ipcRenderer.invoke("nmx:stop-all"),

@@ -1,6 +1,6 @@
 # Digest: @graffik-ng/nmx-protocol
 
-**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-18 (v0.11) · 248 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
+**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.12) · 264 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
 
 ## packet.ts — codec
 
@@ -83,6 +83,14 @@ Namespaces returning `Packet`: `general` (sub 0), `motors` (1–3, `Motor = 1|2|
 - **There is deliberately no `invert` on a `LensAxis`** (ADR-0018 §5). The move describes the BARREL; motor handedness is rig config in preferences, declared to the board with `LAXIS`, and applied by the firmware at its DIR pin. Nothing between the two flips anything — not display, not export, not the wire program.
 - `decimateLensPoints(points, tol)` — Douglas–Peucker with a **VERTICAL** error metric, iterative not recursive. Perpendicular distance would mix ms and travel units into one number whose answer changes with your choice of time unit; vertical distance bounds exactly "how far the device's linear interpolation can be from the spline", in the units the wire uses. **The firmware may only interpolate linearly** — the bound is stated against that.
 - `lensPeakRate` / `lensFeasibility(program, limits)` — the pre-flight. Flags a lane with no motor, an uncalibrated barrel, and a pull that outruns the motor's measured top speed (naming the axis, the speed and the moment). `lensToleranceForSteps` derives the bound from calibrated travel; `DEFAULT_LENS_TOLERANCE_UNITS` = 32 when uncalibrated.
+
+### The lens library (ADR-0019)
+
+- `LensLibraryEntry {id, name, kind, marks, notes?, savedAt?}` + a versioned `.graffiklens` file (`LENS_LIBRARY_FORMAT`/`_VERSION`). `serializeLensLibrary` / `parseLensLibrary` refuse somebody else's JSON and a newer version rather than guessing (same discipline as ADR-0010/0004).
+- **Merge matches on `id`, never on name.** Two people call a lens "35mm" and mean different glass; the same lens renamed is still the same lens. `lensLibraryId(kind, name, salt)` makes readable derived ids — the salt is the caller's, so the core stays pure.
+- `mergeLensLibrary(existing, incoming)` → `{merged, added, updated, rejected}`. **A malformed entry does NOT sink the import** — the survivors go in and the casualties are named. Deliberately the opposite of a move file: a move is one indivisible thing, a library is a collection. `merged` is always sorted by kind then name so a picker is readable.
+- `validateLensLibraryEntry` delegates to `validateLensMap` — an entry that would be rejected as a map cannot be used, and finding that out at apply time is too late.
+- `lensEntryToMap` / `lensMapToEntry` **copy** their marks; mutating one must not reach the other.
 
 ## limits.ts — soft travel limits (ADR-0013)
 
