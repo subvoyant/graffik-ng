@@ -86,6 +86,25 @@ The classic engine, simplest possible move.
 Record the number. Repeat the same test with a **camera-weight payload** — steppers
 that repeat beautifully unloaded can drop steps under mass.
 
+**The app is recording all five passes while you do this** (ADR-0027). Open
+**◉ Passes…** afterwards:
+
+- Compare pass 1 with pass 5. That is the pass-to-pass deviation **along the whole
+  move**, not just at the end — the tape can only see where it stopped.
+- Read the two numbers as different things. The tape is the better measurement of
+  the endpoint; the app is the only measurement of the middle. If the tape says
+  0.3 mm and the app says the carriage was 400 steps out at 60%, **both are true**
+  and something interesting happens mid-move.
+- If a comparison comes back *"a bound, not a measurement"*, that is the app saying
+  the deviation was smaller than a whole-percent progress report can resolve. It is
+  a real result — it just means "at least this good", not "exactly this".
+
+**Check `ms/sample` in that dialog on the very first pass.** It is the measured cost
+of one sample, and it is the first number from real hardware that this software has
+ever had. Under ~150 ms is comfortable at the 500 ms poll. Much above that and the
+poll is backing up: turn off `checkSending` in preferences (saves three of the eight
+queries), and say so in the log.
+
 ## Phase 4 — key-frame engine, and the ADR-0006 shootout (~30 min)
 
 1. In the timeline, build a **3-point move** (jog → ⏺ Capture at 0 s, mid, end).
@@ -118,9 +137,18 @@ that counts.
 Update `claude/graffik-ng-decisions.md` (or the repo's decision log) with:
 
 - Firmware version reported
-- Repeatability spread: classic vs key-frame, unloaded vs loaded
+- Repeatability spread: classic vs key-frame, unloaded vs loaded — **and the app's
+  own pass-to-pass numbers alongside them**, which measure a different thing
+- `ms/sample`, and whether the 500 ms poll held up
+- Whether motor query 124 was ever true during a run (if it never is, the recorder
+  can drop three queries per sample)
 - Maximum speed that ran reliably under camera load → set as the jog clamp
 - Anything the app got wrong, in the app's own words (the status line text)
+
+**Export the bring-up report before you leave the room** — it now carries every
+recorded pass, its coverage, and an automatic comparison of the last two complete
+passes on each engine. And export the CSVs: a recording is held in memory only, and
+twenty of them at most.
 
 ## Safe-limits worksheet
 

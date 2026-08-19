@@ -1,6 +1,6 @@
 # Digest: apps/jog-slice (Electron app)
 
-**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.19) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
+**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.21) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
 
 ## Shape
 
@@ -94,7 +94,7 @@ Layout is a fixed frame — appbar / rail(244px) / stage / statusbar — with **
 
 **The rail's height budget is real and it is nearly spent.** Worst case (keyframe selected → the inspector expands, pass log populated) fits with 0 px to spare at the default 820 px window and overflows below ~790 px. The last rail panel (Pass log) is the elastic one — `flex:1 1 auto; min-height:56px`, scrolling internally — so it absorbs the slack; `.rail` keeps `overflow-y:auto` only as a safety valve. **Adding another always-visible rail panel will break the no-scroll rule** — put new configuration in a modal (as gamepad settings did) instead. Adding the Soft-limits panel in v0.6 is what consumed the remaining budget; it was paid for by moving its help text to a `title=` tooltip and putting the keyframe inspector's Time/Pos on one row.
 
-**Browser-preview stub:** `renderer.js` installs a fake `window.nmx` when Electron's bridge is absent, so `index.html` opens directly in a browser for design work and screenshots. Guarded by `if (!window.nmx)` — unreachable under Electron. `window.nmx.__preview` flags it in the status line.
+**Browser-preview stub:** `renderer.js` installs a fake `window.nmx` when Electron's bridge is absent, so `index.html` opens directly in a browser for design work and screenshots. Guarded by `if (!window.nmx)` — unreachable under Electron. `window.nmx.__preview` flags it in the status line. **A stub must be at least as faithful as the thing it stands in for**, for the same reason the simulator must be exactly as strict as the firmware (hub invariant 23): every headless render check runs against these stubs, so a stub that answers wrongly makes the verification worthless. v0.21 shipped a `window.trace.deviationLines` stub that returned the refusal line unconditionally, and the render check duly reported *"not comparable"* over a perfectly good comparison. The rule is not "keep stubs small" — it is *keep stubs honest, and keep them thin where honesty is cheap*.
 
 ## Editor interactions (v0.5)
 
@@ -147,6 +147,21 @@ Layout is a fixed frame — appbar / rail(244px) / stage / statusbar — with **
 - **How to re-verify** (needs Playwright, which the repo does not depend on — this runs outside it): load `index.html` headless, `startPassSweep(...)`, sample `playheadFrame` on every `requestAnimationFrame`, and drive `anchorPassSweep()` every 500 ms with values that **deliberately disagree** with the extrapolation by ±1%. Then check the per-frame velocity for *backwards steps* and *spikes over 3× median*. Disagreeing readings are the case that snaps; agreeing ones prove nothing.
 - Measured: 60 fps, `render()` ≈ 0.74 ms on a six-lane 30 s move, 0 backwards steps, 0 velocity spikes over 3× median. Redrawing less often would have been the obvious wrong fix.
 - `followPlayhead()` pans the view when the sweep leaves the visible range.
+
+## The flight recorder (v0.21 — ADR-0027)
+
+- **One poll, both jobs.** `nmx:pass-sample` replaced `nmx:kf-progress` / `nmx:progress` in both run loops: the sample the recorder keeps IS the reading the progress bar and the playhead are driven from. Two timers would be two clocks disagreeing about when the pass was.
+- Per sample: 2 progress queries + 3 positions + 3 × query 124 = **8 round trips**, and each sample records its own `costMs`. At 19200 baud that is the number to watch; `prefs.trace.checkSending` drops it to 5 once the rig shows 124 is always false during a run.
+- `beginRecording` / `endRecording` bracket every pass. **Every stop path closes the recording rather than discarding it** — a stopped pass is the one you want to look at. `endedBy` is `complete` | `stopped` | `lost`.
+- Coverage is reported into the pass log the moment a pass ends, and a **backwards percent is said out loud** rather than left in the data.
+- **Overlay: the axis's own hue, dashed and thinner.** Identity belongs to the series (ADR-0012); provenance is style. A recorded Slide in a fifth colour would read as a fifth thing. Direct-labelled `N recorded passes · dashed`, because a dash pattern is not self-explanatory. Capped at 4 shown, and the cap says so when it drops one.
+- **`axisScale()` includes the overlays.** A deviation big enough to leave the lane is the most important thing the overlay could show; scaling from the plan alone would draw it outside the box. Same defect as v0.6's invisible taught limits.
+- `◉ Passes…` modal (the rail height budget is spent — new configuration goes in a modal): recordings with coverage, overlay/vs-plan/CSV per pass, and a two-pass comparison. Wording comes from `window.trace.deviationLines`, not restated here.
+
+  ![The Recorded passes dialog: each pass with its coverage, set-aside readings and stopped/backwards flags, and a two-pass comparison reporting one axis as a bound rather than a measurement](../images/recorded-passes.png)
+
+  ![Three timeline lanes with a recorded pass drawn over the planned curve in the same hue, dashed, the lane scale grown to contain it](../images/trace-overlay.png)
+- **`.sheet` has `max-width: 560px`, which is a CAP** — an inline `style="width:620px"` on a sheet is silently clipped and always has been (three existing dialogs declare widths they never get). Use `.sheet.wide` (760px) instead of writing a width and assuming you got it.
 
 ## Bring-up report + creep (v0.16 — ADR-0023)
 

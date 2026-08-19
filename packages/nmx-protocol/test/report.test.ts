@@ -134,3 +134,56 @@ describe("the bring-up report", () => {
     expect(bringUpReport(s)).toBe(bringUpReport(s));
   });
 });
+
+describe("recorded passes in the report (ADR-0027)", () => {
+  type Summary = NonNullable<BringUpState["traces"]>["summaries"][number];
+  const summary = (o: Partial<Summary> = {}): Summary => ({
+    id: "pass-1", engine: "keyframe", endedBy: "complete",
+    samples: 61, usable: 59, suspect: 0, failed: 0,
+    fromPercent: 0, toPercent: 100, maxGapPct: 4, medianCostMs: 118, wentBackwards: false,
+    ...o,
+  });
+
+  it("says NOT MEASURED when no pass was recorded, and says what that costs", () => {
+    const md = bringUpReport({ at });
+    expect(md).toMatch(/## Recorded passes/);
+    expect(md).toMatch(/\*\*Not measured\.\*\* No pass was recorded/);
+    expect(md).toMatch(/only what it was told to do/);
+  });
+
+  it("spells out a backwards percent rather than folding it into a count", () => {
+    const md = bringUpReport({ at, traces: { summaries: [summary({ wentBackwards: true })] } });
+    expect(md).toMatch(/percent went backwards/);
+  });
+
+  it("names a pass that was stopped, and the readings it set aside", () => {
+    const md = bringUpReport({ at, traces: { summaries: [summary({ endedBy: "stopped", suspect: 3, failed: 2 })] } });
+    expect(md).toMatch(/ended: stopped/);
+    expect(md).toMatch(/3 sample\(s\) taken mid send-to/);
+    expect(md).toMatch(/2 failed read\(s\)/);
+  });
+
+  it("carries the sample cost, because the poll rate cannot be chosen off the rig", () => {
+    const md = bringUpReport({ at, traces: { summaries: [summary({ medianCostMs: 240 })] } });
+    expect(md).toMatch(/240 ms per sample/);
+    expect(md).toMatch(/the poll rate is the thing to/);
+  });
+
+  it("reports a below-floor comparison as a bound, in the report's own words", () => {
+    const md = bringUpReport({
+      at,
+      traces: {
+        summaries: [summary()],
+        comparisons: [{
+          title: "pass-1 vs pass-2 (keyframe) — pass-to-pass",
+          result: {
+            ok: true, fromPercent: 0, toPercent: 100, comparedPoints: 101,
+            perAxis: [{ axis: 0, name: "Slide", maxSteps: 4, rmsSteps: 1.2, atPercent: 50, points: 101, floorSteps: 40, belowFloor: true }],
+          },
+        }],
+      },
+    });
+    expect(md).toMatch(/pass-1 vs pass-2/);
+    expect(md).toMatch(/a bound, not a measurement/);
+  });
+});

@@ -208,6 +208,15 @@ export const motors = {
   queryProgramStop: (m: Motor) => motor(m, 112),
   /** query 113 — travel shots/time. */
   queryTravel: (m: Motor) => motor(m, 113),
+  /**
+   * query 124 — is this motor mid "send to"?
+   *
+   * Load-bearing for anything that reads position while the rig moves: the
+   * firmware answers query 106 as `isSending() ? (lastMs/ms) * pos : pos`, so a
+   * position read during a send comes back in the motor's *previous* microstep
+   * units. A key-frame move never sets the flag; a goto always does.
+   */
+  queryIsSending: (m: Motor) => motor(m, 124),
 };
 
 /* ------------------------------------------------------------------ */

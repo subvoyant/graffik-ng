@@ -26,6 +26,7 @@ import {
   fitCalibration, diagnoseCalibration, repeatability,
   probeNmx, judgePorts, noUsablePortAdvice,
   capUntaughtJog, bringUpReport,
+  newTrace, addSample, traceCoverage, compareTraces, deviationFromPlan, traceToCsv,
   NO_LIMITS, isTaught, jogWouldExceed, violationsForFilm, describeViolations,
 } from "@graffik-ng/nmx-protocol";
 
@@ -67,6 +68,12 @@ const DEFAULT_PREFS = {
     },
   },
   recent: [],
+  /* The flight recorder (ADR-0027). On by default: a pass you did not record is
+     gone, and the first hardware session is the one worth having a record of.
+     `checkSending` costs three extra queries a sample and buys the guarantee
+     that a rescaled reading is never mixed in (firmware query 106 vs 124) — turn
+     it off only after the rig has shown 124 is always false during a run. */
+  trace: { enabled: true, checkSending: true },
   /* Lens motors are rig configuration, not part of a move (ADR-0018).
      `steps` is remembered between sessions as a HINT for the feasibility
      pre-flight — it is never treated as homing, because only the board knows
@@ -143,6 +150,7 @@ function loadPrefs() {
          else. Every sub-object gets a guard now; none of them may be trusted
          to have survived an older build. */
       recent: Array.isArray(raw.recent) ? raw.recent.filter((p) => typeof p === "string") : [],
+      trace: { ...DEFAULT_PREFS.trace, ...(raw.trace ?? {}) },
       triggers: {
         ...DEFAULT_PREFS.triggers, ...(raw.triggers ?? {}),
         bindings: Array.isArray(raw.triggers?.bindings) ? raw.triggers.bindings : [...DEFAULT_PREFS.triggers.bindings],
@@ -495,6 +503,178 @@ ipcMain.handle("nmx:kf-progress", async () => {
   const p = await c.query(keyFrame.queryPercentComplete());
   return { state: s.value, percent: p.value };
 });
+
+/* ---------------- IPC: the flight recorder (ADR-0027) ---------------- */
+
+/**
+ * What the rig actually did, recorded while it did it.
+ *
+ * Sampling folds into the poll the renderer was already running for the
+ * progress bar, so there is ONE timer and one place a pass is observed from.
+ * A second timer would have meant two clocks disagreeing about when the pass
+ * was, which is the bug the playhead already taught us (ADR-0025).
+ *
+ * Safe to do mid-move because the firmware steps off Timer1, not the main loop
+ * (`OM_MotorMaster.ino` startISR) — a serial query costs loop time, not steps.
+ */
+const TRACE_CAP = 20;
+let traces = [];
+let activeTrace = null;
+let traceSeq = 0;
+let traceDropped = 0;
+
+const AXIS_NAMES = ["Slide", "Pan", "Tilt"];
+
+async function readMicrosteps() {
+  const out = [];
+  for (const m of [1, 2, 3]) {
+    try { out.push((await requireClient().query(motors.queryMicrosteps(m))).value); }
+    catch { out.push(null); }
+  }
+  return out;
+}
+
+ipcMain.handle("nmx:trace-begin", async (_e, engine, meta) => {
+  if (!prefs.trace.enabled) return { recording: false, reason: "recording is switched off in preferences" };
+  const microsteps = await readMicrosteps();
+  activeTrace = newTrace({
+    id: `pass-${++traceSeq}`,
+    engine,
+    startedAt: new Date().toISOString(),
+    durationFrames: meta?.durationFrames ?? 0,
+    timebase: meta?.timebase ?? { num: 24, den: 1, dropFrame: false },
+    axisNames: AXIS_NAMES,
+    microsteps,
+  });
+  activeTrace.note = meta?.name;
+  return { recording: true, id: activeTrace.id, microsteps };
+});
+
+/**
+ * One poll: progress AND position, in a single IPC round trip.
+ *
+ * Every position read is individually guarded. A query that times out records a
+ * `null` for that axis and the pass carries on — a recorder that can abort the
+ * take it is recording is worse than no recorder.
+ */
+ipcMain.handle("nmx:pass-sample", async (_e, engine) => {
+  const c = requireClient();
+  const t0 = Date.now();
+  let percent = 0, state = 0, running = false;
+  if (engine === "classic") {
+    percent = (await c.query(general.queryProgramProgress())).value;
+    running = Boolean((await c.query(general.queryMotorsRunning())).value);
+    state = running ? 1 : 0;
+  } else {
+    state = (await c.query(keyFrame.queryRunState())).value;
+    percent = (await c.query(keyFrame.queryPercentComplete())).value;
+    running = state !== 0;
+  }
+
+  if (activeTrace) {
+    const position = [];
+    let suspect = false;
+    for (const m of [1, 2, 3]) {
+      try { position.push((await c.query(motors.queryPosition(m))).value); }
+      catch { position.push(null); }
+      if (prefs.trace.checkSending) {
+        /* Query 106 comes back rescaled while a motor is mid "send to" — the
+           firmware silently switches to quarter-stepping for a send. One motor
+           sending taints the whole sample, because a pass where an axis is
+           being repositioned is not the phase we are measuring. */
+        try { if ((await c.query(motors.queryIsSending(m))).value) suspect = true; }
+        catch { /* unknown; leave the sample as taken */ }
+      }
+    }
+    addSample(activeTrace, {
+      atMs: t0 - Date.parse(activeTrace.startedAt),
+      percent: Number(percent) || 0,
+      position,
+      suspect,
+      costMs: Date.now() - t0,
+    });
+  }
+  return { state, percent, running };
+});
+
+ipcMain.handle("nmx:trace-end", (_e, endedBy) => {
+  if (!activeTrace) return null;
+  activeTrace.endedBy = endedBy ?? "complete";
+  const cov = traceCoverage(activeTrace);
+  traces.push(activeTrace);
+  while (traces.length > TRACE_CAP) { traces.shift(); traceDropped++; }
+  const id = activeTrace.id;
+  activeTrace = null;
+  return { id, coverage: cov, dropped: traceDropped };
+});
+
+ipcMain.handle("nmx:traces", () => ({
+  dropped: traceDropped,
+  cap: TRACE_CAP,
+  items: traces.map((t) => ({
+    id: t.id, engine: t.engine, startedAt: t.startedAt, note: t.note,
+    endedBy: t.endedBy, microsteps: t.microsteps, coverage: traceCoverage(t),
+  })),
+}));
+
+ipcMain.handle("nmx:trace-compare", (_e, idA, idB) => {
+  const a = traces.find((t) => t.id === idA);
+  const b = traces.find((t) => t.id === idB);
+  if (!a || !b) throw new Error("that pass is no longer in memory");
+  return compareTraces(a, b);
+});
+
+/**
+ * Measured against the move that was uploaded, sampled from the SAME solver the
+ * upload used (ADR-0009) — percent maps to a frame, the frame to milliseconds,
+ * and the spline answers. Comparing against a second interpolation would be
+ * comparing the rig to a drawing of the move rather than the move.
+ */
+ipcMain.handle("nmx:trace-vs-plan", (_e, id, film) => {
+  const t = traces.find((x) => x.id === id);
+  if (!t) throw new Error("that pass is no longer in memory");
+  const durMs = filmDurationMs(film);
+  const solved = new Map();
+  for (const { axis, points } of filmAxesToMs(film)) solved.set(axis, computeVelocities(points));
+  return deviationFromPlan(t, (pct) => {
+    const ms = (durMs * pct) / 100;
+    return [0, 1, 2].map((axis) => {
+      const sp = solved.get(axis);
+      return sp ? splineAt(sp, ms).value : null;
+    });
+  });
+});
+
+/**
+ * The recording as something the timeline can draw: percent mapped onto the
+ * frame axis using the trace's OWN duration, so a classic pass and a key-frame
+ * pass each land on their own time base rather than being stretched onto the
+ * film's.
+ */
+ipcMain.handle("nmx:trace-points", (_e, id) => {
+  const t = traces.find((x) => x.id === id);
+  if (!t) throw new Error("that pass is no longer in memory");
+  const series = [0, 1, 2].map((axis) => ({
+    axis,
+    points: t.samples
+      .filter((s) => !s.suspect && typeof s.position[axis] === "number")
+      .map((s) => ({ frame: (s.percent / 100) * t.durationFrames, pos: s.position[axis] })),
+  }));
+  return { id: t.id, engine: t.engine, durationFrames: t.durationFrames, series };
+});
+
+ipcMain.handle("nmx:trace-csv", async (_e, id) => {
+  const t = traces.find((x) => x.id === id);
+  if (!t) throw new Error("that pass is no longer in memory");
+  const { canceled, filePath } = await dialog.showSaveDialog({
+    title: "Export pass recording",
+    defaultPath: `${t.id}-${t.startedAt.slice(0, 19).replace(/[:T]/g, "-")}.csv`,
+    filters: [{ name: "CSV", extensions: ["csv"] }],
+  });
+  if (canceled || !filePath) return null;
+  await fs.writeFile(filePath, traceToCsv(t), "utf-8");
+  return filePath;
+});
 ipcMain.handle("nmx:goto-kf-start", async (_e, axes) => {
   const c = requireClient();
   for (const { axis, points } of axes) {
@@ -789,6 +969,25 @@ ipcMain.handle("nmx:bringup-report", async (e, extra) => {
       spans: prefs.commission.spans,
       repeatability: { readings: prefs.commission.passes, thresholdMm: prefs.commission.thresholdMm },
       lensMotors: prefs.lens.motors,
+      traces: {
+        summaries: traces.map((t) => ({
+          id: t.id, engine: t.engine, endedBy: t.endedBy, ...traceCoverage(t),
+        })),
+        /* The last two COMPLETE passes on the same engine, compared without
+           being asked. It is the number the session exists to produce, and a
+           report that made you go and click something to get it would mostly
+           be written without it. */
+        comparisons: (() => {
+          const out = [];
+          for (const engine of ["keyframe", "classic"]) {
+            const done = traces.filter((t) => t.engine === engine && t.endedBy === "complete");
+            if (done.length < 2) continue;
+            const [a, b] = done.slice(-2);
+            out.push({ title: `${a.id} vs ${b.id} (${engine}) — pass-to-pass`, result: compareTraces(a, b) });
+          }
+          return out;
+        })(),
+      },
       triggerDevice: backends.get("serial")?.describe() ?? null,
       log: extra?.log ?? [],
       notes: extra?.notes ?? "",

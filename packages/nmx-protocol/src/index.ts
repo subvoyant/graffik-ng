@@ -16,3 +16,4 @@ export * from "./commission.js";
 export * from "./controls.js";
 export * from "./diagnose.js";
 export * from "./report.js";
+export * from "./trace.js";

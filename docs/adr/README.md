@@ -31,3 +31,4 @@ Immutable decision records. Accepted = in force. Supersede, never edit. See ADR-
 | [0024](0024-dead-export-audit.md) | Dead-export audit: "tested" is not "reachable" | Accepted |
 | [0025](0025-playhead-follows-the-pass.md) | Playhead follows a running pass, anchored to the firmware's clock | Accepted |
 | [0026](0026-partial-execution-refuse-or-say-so.md) | Partial execution: a headless runner refuses, a supervised UI says so and proceeds | Accepted |
+| [0027](0027-the-flight-recorder.md) | The flight recorder: record every pass, compare at matched percent, state the resolution floor | Accepted (unverified against hardware) |

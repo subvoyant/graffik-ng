@@ -1,6 +1,6 @@
 # Digest: @graffik-ng/nmx-protocol
 
-**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.17) · 337 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
+**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.21) · 361 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
 
 ## packet.ts — codec
 
@@ -92,12 +92,26 @@ Namespaces returning `Packet`: `general` (sub 0), `motors` (1–3, `Motor = 1|2|
 - `validateLensLibraryEntry` delegates to `validateLensMap` — an entry that would be rejected as a map cannot be used, and finding that out at apply time is too late.
 - `lensEntryToMap` / `lensMapToEntry` **copy** their marks; mutating one must not reach the other.
 
-## report.ts — the bring-up report (ADR-0023)
+## trace.ts — the flight recorder (ADR-0027)
+
+The only module that knows what the rig **did** rather than what it was told to do. Pure: no clock, no I/O, timestamps supplied by the caller.
+
+- `newTrace` / `addSample` / `traceCoverage` / `resampleByPercent` / `compareTraces` / `deviationFromPlan` / `deviationLines` / `traceToCsv`.
+- **The join key is the controller's percent, never host time.** Two takes started three seconds apart are the same move at 40% (ADR-0005, ADR-0025).
+- **Three firmware facts this rests on**, from the 2018 dispatch (ADR-0004): stepping is on **Timer1**, so a query mid-move costs loop time and not steps; **query 106 is rescaled** to `(lastMs/ms) × pos` while a motor is mid *send-to*, because a send silently forces quarter-stepping; a **key-frame move never sets that flag** — the pre-pass goto does. **Motor query 124** answers "am I sending?", which is how a rescaled reading gets caught instead of averaged in.
+- A sample where any motor reports sending is **suspect** and excluded from every comparison. Conservative on purpose: that is a phase we are not measuring.
+- **Nothing is invented to fill a hole** — no interpolation across a gap wider than `maxGapPct` (10% default), `null` outside the recorded span, and a comparison with too little overlap or too few points is **refused with the reason** (same idiom as ADR-0020 refusing to name a culprit from two spans).
+- **The resolution floor is computed and stated.** Progress is reported in whole percent, so a matched-percent comparison cannot resolve motion finer than one percent of the path; `floorSteps` is the worst steps-per-percent over the span, and a result at or under it is worded as a **bound, not a measurement**. `deviationLines` owns that wording — the app bridges it (`window.trace`) rather than restating it, so the modal and the bring-up report cannot disagree about the same number.
+- `addSample` deliberately does **not** clamp, dedupe or enforce monotonic percent. A controller reporting 40 then 38 is telling you something; `traceCoverage().wentBackwards` surfaces it.
+- `traceToCsv` puts the **microstep setting in the column header** — a step count with no microstep is not a measurement.
+
+## report.ts — the bring-up report (ADR-0023, traces added in v0.21)
 
 - `bringUpReport(state)` → markdown. **Pure**: caller supplies the timestamp, so the same session always renders the same bytes and it is testable without freezing time.
 - **Everything unmeasured is listed as "not measured", never omitted** — a report that drops what nobody got to reads like a complete one, and knowing what is still unknown is the point.
 - **Warnings are spelled out, not counted** ("1 warning" tells nobody anything), and **measured-but-not-applied is flagged**: measuring a calibration and never pressing Apply is the easiest way to leave a session believing a number is in effect when it is not.
 - Pass log comes from the RENDERER (main has never seen it), verbatim and newest-first.
+- **Recorded passes (ADR-0027)** get their own section: per-pass coverage, a spelled-out flag for a backwards percent / a stopped pass / set-aside readings, the **measured sample cost** (the number that decides whether the 500 ms poll can be tightened — it cannot be chosen off the rig), and an automatic pass-to-pass comparison of the last two complete passes per engine. No recording says **"Not measured"** and says what that costs.
 
 ### limits.ts also carries the first-motion creep cap (ADR-0023)
 

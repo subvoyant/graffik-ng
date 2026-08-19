@@ -75,6 +75,14 @@ contextBridge.exposeInMainWorld("controls", {
   duplicateButtonBindings: (b) => core.duplicateButtonBindings(b),
 });
 
+/* How a deviation is WORDED is a policy, not a rendering detail — "a bound, not
+   a measurement" has to say the same thing in the modal and in the bring-up
+   report. Bridged rather than reimplemented, for the reason the four lens
+   helpers taught us in v0.17. */
+contextBridge.exposeInMainWorld("trace", {
+  deviationLines: (r) => core.deviationLines(r),
+});
+
 contextBridge.exposeInMainWorld("nmx", {
   // connection
   listPorts: () => ipcRenderer.invoke("nmx:list-ports"),
@@ -112,6 +120,16 @@ contextBridge.exposeInMainWorld("nmx", {
   kfStop: () => ipcRenderer.invoke("nmx:kf-stop"),
   kfProgress: () => ipcRenderer.invoke("nmx:kf-progress"),
   gotoKfStart: (axes) => ipcRenderer.invoke("nmx:goto-kf-start", axes),
+  // the flight recorder (ADR-0027) — passSample replaces the progress poll,
+  // because the pass is observed from one place or from two disagreeing ones
+  traceBegin: (engine, meta) => ipcRenderer.invoke("nmx:trace-begin", engine, meta),
+  passSample: (engine) => ipcRenderer.invoke("nmx:pass-sample", engine),
+  traceEnd: (endedBy) => ipcRenderer.invoke("nmx:trace-end", endedBy),
+  traces: () => ipcRenderer.invoke("nmx:traces"),
+  traceCompare: (a, b) => ipcRenderer.invoke("nmx:trace-compare", a, b),
+  traceVsPlan: (id, film) => ipcRenderer.invoke("nmx:trace-vs-plan", id, film),
+  tracePoints: (id) => ipcRenderer.invoke("nmx:trace-points", id),
+  traceCsv: (id) => ipcRenderer.invoke("nmx:trace-csv", id),
   // camera
   camArm: (cfg) => ipcRenderer.invoke("nmx:cam-arm", cfg),
   camFire: () => ipcRenderer.invoke("nmx:cam-fire"),

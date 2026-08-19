@@ -19,6 +19,7 @@
 import { AxisLimit, isTaught } from "./limits.js";
 import { CalObservation, fitCalibration, repeatability } from "./commission.js";
 import { LensAxisKind } from "./lens.js";
+import { CompareResult, deviationLines } from "./trace.js";
 
 export interface BringUpState {
   /** ISO timestamp — supplied, not read, so this stays a pure function. */
@@ -34,6 +35,21 @@ export interface BringUpState {
   calibration?: Record<string, number | undefined>;
   spans?: Partial<Record<"slide" | "pan" | "tilt", CalObservation[]>>;
   repeatability?: { readings: number[]; thresholdMm: number };
+  /**
+   * Recorded passes (ADR-0027) and, where two of them were compared, the result.
+   * The tape-measure repeatability above measures the endpoint; this measures
+   * everything in between. They answer different questions and neither replaces
+   * the other, so the report carries both.
+   */
+  traces?: {
+    summaries: {
+      id: string; engine: string; endedBy?: string;
+      samples: number; usable: number; suspect: number; failed: number;
+      fromPercent: number; toPercent: number; maxGapPct: number;
+      medianCostMs: number; wentBackwards: boolean;
+    }[];
+    comparisons?: { title: string; result: CompareResult }[];
+  };
   lensMotors?: Partial<Record<LensAxisKind, { steps: number; maxStepsPerSec: number; invert: boolean }>>;
   triggerDevice?: string | null;
   /** Newest-first lines from the pass log — what actually happened, in order. */
@@ -138,6 +154,40 @@ export function bringUpReport(s: BringUpState): string {
     L.push(`- Readings (mm): ${rep.readings.map((v) => v.toFixed(2)).join(", ")}`);
     L.push(`- Limit: ${rep.thresholdMm} mm`);
     L.push(`- **${r.verdict}**`);
+  }
+  L.push("");
+
+  L.push(`## Recorded passes`);
+  const tr = s.traces;
+  if (!tr?.summaries?.length) {
+    L.push(`- **Not measured.** No pass was recorded, so nothing here says what the rig did —`);
+    L.push(`  only what it was told to do.`);
+  } else {
+    for (const t of tr.summaries) {
+      const flags = [
+        t.endedBy && t.endedBy !== "complete" ? `ended: ${t.endedBy}` : null,
+        t.wentBackwards ? `**the controller's percent went backwards**` : null,
+        t.suspect ? `${t.suspect} sample(s) taken mid send-to and set aside` : null,
+        t.failed ? `${t.failed} failed read(s)` : null,
+      ].filter(Boolean);
+      L.push(
+        `- \`${t.id}\` (${t.engine}) — ${t.usable}/${t.samples} usable samples over ` +
+        `${Math.round(t.fromPercent)}–${Math.round(t.toPercent)}%, worst blind spot ` +
+        `${Math.round(t.maxGapPct)}%, ${Math.round(t.medianCostMs)} ms per sample` +
+        (flags.length ? ` — ${flags.join("; ")}` : ""),
+      );
+    }
+    /* The sample cost is here because it is the number that decides whether the
+       500 ms poll can be tightened. It cannot be reasoned about off the rig. */
+    L.push("");
+    L.push(`Sampling cost is measured, not assumed: at a 500 ms poll, a sample costing`);
+    L.push(`much more than ~150 ms is most of the bus, and the poll rate is the thing to`);
+    L.push(`change before anything else.`);
+    for (const c of tr.comparisons ?? []) {
+      L.push("");
+      L.push(`**${c.title}**`);
+      for (const line of deviationLines(c.result)) L.push(`- ${line}`);
+    }
   }
   L.push("");
 

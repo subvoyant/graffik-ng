@@ -113,6 +113,21 @@ if (!window.controls) {
       return [...m.entries()].filter(([, ids]) => ids.length > 1).map(([index, ids]) => ({ index, ids }));
     },
   };
+  /* Mirrors the core's wording, including the bound-vs-measurement distinction.
+     A stub that is less faithful than the thing it stands in for makes every
+     render check run against it worthless — the same rule the simulator lives
+     under (it must be exactly as strict as the firmware). The first version of
+     this stub returned the refusal line unconditionally, and a headless render
+     duly reported "not comparable" over a perfectly good comparison. */
+  window.trace = {
+    deviationLines: (r) => !r?.ok
+      ? [`not comparable — ${r?.reason ?? "unknown"}`]
+      : r.perAxis.map((d) =>
+          d.points === 0 ? `${d.name}: no overlapping readings`
+            : d.belowFloor
+              ? `${d.name}: within ±${d.floorSteps.toFixed(0)} steps — at or below what a whole-percent comparison can resolve, so this is a bound, not a measurement`
+              : `${d.name}: max ${d.maxSteps.toFixed(0)} steps at ${d.atPercent.toFixed(0)}%, rms ${d.rmsSteps.toFixed(1)} (floor ±${d.floorSteps.toFixed(0)}, ${d.points} points)`),
+  };
 }
 
 if (!window.nmx) {
@@ -163,6 +178,17 @@ if (!window.nmx) {
     }, kfRun: async () => { pct = 0; }, kfStop: async () => {},
     kfProgress: async () => ({ state: pct < 100 ? 1 : 0, percent: (pct = Math.min(100, pct + 20)) }),
     gotoKfStart: async () => {},
+    /* Flight recorder (ADR-0027): the browser preview reports honestly that it
+       recorded nothing, rather than synthesising a trace that would make the
+       comparison UI look like it worked. */
+    traceBegin: async () => ({ recording: false, reason: "browser preview — nothing to record" }),
+    passSample: async () => ({ state: pct < 100 ? 1 : 0, percent: (pct = Math.min(100, pct + 20)), running: pct < 100 }),
+    traceEnd: async () => null,
+    traces: async () => ({ dropped: 0, cap: 20, items: [] }),
+    traceCompare: async () => ({ ok: false, reason: "browser preview — no recordings", perAxis: [] }),
+    traceVsPlan: async () => ({ ok: false, reason: "browser preview — no recordings", perAxis: [] }),
+    tracePoints: async () => ({ id: "", engine: "keyframe", durationFrames: 0, series: [] }),
+    traceCsv: async () => null,
     camArm: async () => {}, camFire: async () => {}, camDisable: async () => {},
     saveFilm: async () => null, loadFilm: async () => null, stopAll: async () => { speeds.fill(0); },
     lensStatus: async () => ({
@@ -602,7 +628,7 @@ const CONTROL_RUN = {
   estop: async () => {
     await window.nmx.stopAll();
     stopGamepad();
-    clearInterval(pollTimer); endPassSweep();
+    clearInterval(pollTimer); endPassSweep(); endRecording("stopped");
     status("STOP ALL — from the controller. Everything halted.");
     logPass("STOP ALL (physical button)");
   },
@@ -847,7 +873,13 @@ const xToFrame = (x, r) => Math.round(xToF(x, r));
 
 function axisScale(i) {
   const pts = film.axes[i].points, sm = previewCache?.[i]?.samples ?? [];
-  const vals = [...pts.map((p) => p.position), ...sm.map((s) => s.pos)];
+  /* Recorded passes are IN the scale, not clipped by it (ADR-0027). A deviation
+     big enough to leave the lane is the single most important thing the overlay
+     could ever show, and a scale computed only from the plan would draw it
+     outside the box and lose it. Same defect as v0.6, where a taught limit
+     sitting outside the move's span was silently invisible. */
+  const rec = overlays.flatMap((o) => (o.series?.[i]?.points ?? []).map((p) => p.pos));
+  const vals = [...pts.map((p) => p.position), ...sm.map((s) => s.pos), ...rec];
   let lo = Math.min(...vals), hi = Math.max(...vals);
   if (hi - lo < 100) { const m = (lo + hi) / 2; lo = m - 50; hi = m + 50; }
   /* Grow the view to include taught soft limits, so the operator can SEE the
@@ -880,6 +912,152 @@ function niceStep(spanFrames, targetPx, widthPx) {
     .sort((a, b) => a - b);
   return steps.find((s) => s >= raw) ?? steps[steps.length - 1];
 }
+
+/* ---------------- the flight recorder (ADR-0027) ----------------
+   Everything else in this app describes what the rig was TOLD to do. This is
+   the only part that knows what it did. */
+
+const TRACE_OVERLAY_CAP = 4;
+let recordingId = null;
+let overlays = [];            // [{id, engine, durationFrames, series}]
+let traceIndex = { items: [], dropped: 0, cap: 0 };
+
+async function beginRecording(engine, durationFrames) {
+  recordingId = null;
+  try {
+    const r = await window.nmx.traceBegin(engine, {
+      durationFrames, timebase: film.timebase, name: film.name,
+    });
+    if (r?.recording) recordingId = r.id;
+    else if (r?.reason) logPass(`not recording — ${r.reason}`);
+  } catch (e) { logPass("not recording — " + e.message); }
+}
+
+async function endRecording(endedBy) {
+  if (!recordingId) return;
+  recordingId = null;
+  try {
+    const r = await window.nmx.traceEnd(endedBy);
+    if (!r) return;
+    const c = r.coverage;
+    logPass(
+      `recorded ${r.id} — ${c.usable}/${c.samples} usable samples over ` +
+      `${Math.round(c.fromPercent)}–${Math.round(c.toPercent)}%, ` +
+      `worst blind spot ${Math.round(c.maxGapPct)}%, ${Math.round(c.medianCostMs)} ms per sample`,
+    );
+    /* Said out loud rather than left in the data: a controller whose percent
+       ran backwards is telling you something about the pass. */
+    if (c.wentBackwards) logPass(`${r.id} — the controller reported percent going BACKWARDS at least once`);
+    if (c.suspect) logPass(`${r.id} — ${c.suspect} sample(s) taken mid send-to and set aside`);
+    if (r.dropped) logPass(`${r.dropped} older recording(s) dropped — only the last ${traceIndex.cap || 20} are kept`);
+    await refreshTraces();
+    if (endedBy === "complete") await addOverlay(r.id);
+  } catch { /* the pass mattered; the bookkeeping did not */ }
+}
+
+async function addOverlay(id) {
+  if (overlays.some((o) => o.id === id)) return;
+  try {
+    const pts = await window.nmx.tracePoints(id);
+    overlays.push(pts);
+    /* Capped, and said out loud — six dashed lines over six lanes is not a
+       reading aid, it is a thicket. */
+    while (overlays.length > TRACE_OVERLAY_CAP) {
+      const gone = overlays.shift();
+      logPass(`overlay ${gone.id} hidden — ${TRACE_OVERLAY_CAP} shown at a time`);
+    }
+    render(); renderTraceList();
+  } catch (e) { status("Could not draw that recording: " + e.message); }
+}
+
+function removeOverlay(id) {
+  overlays = overlays.filter((o) => o.id !== id);
+  render(); renderTraceList();
+}
+
+async function refreshTraces() {
+  try { traceIndex = await window.nmx.traces(); } catch { traceIndex = { items: [], dropped: 0, cap: 0 }; }
+  renderTraceList();
+}
+
+const traceShown = (id) => overlays.some((o) => o.id === id);
+
+function renderTraceList() {
+  const host = $("traceList");
+  if (!host) return;
+  $("traceCap").textContent =
+    `${traceIndex.items.length} kept${traceIndex.dropped ? ` · ${traceIndex.dropped} dropped` : ""}`;
+  if (!traceIndex.items.length) {
+    host.innerHTML = `<div style="color:var(--ink-faint)">Nothing recorded yet. Run a pass.</div>`;
+  } else {
+    host.innerHTML = traceIndex.items.slice().reverse().map((t) => {
+      const c = t.coverage;
+      const flags = [
+        t.endedBy && t.endedBy !== "complete" ? t.endedBy.toUpperCase() : null,
+        c.wentBackwards ? "PERCENT WENT BACKWARDS" : null,
+        c.suspect ? `${c.suspect} mid-send` : null,
+        c.failed ? `${c.failed} failed reads` : null,
+      ].filter(Boolean);
+      /* Grid, not a flex row: the buttons keep their own column so a long
+         coverage line wraps under itself instead of pushing CSV onto a line of
+         its own, where it stops belonging to any pass. */
+      return `<div class="trace-row">
+        <div><b style="font-family:var(--mono)">${t.id}</b>
+          <span class="chip dim">${t.engine}</span>
+          ${flags.length ? `<span style="color:#c98500">${flags.join(" · ")}</span>` : ""}</div>
+        <div class="acts">
+          <button data-tshow="${t.id}" class="${traceShown(t.id) ? "toggled" : ""}">${traceShown(t.id) ? "hide" : "overlay"}</button>
+          <button data-tplan="${t.id}">vs plan</button>
+          <button data-tcsv="${t.id}">CSV</button>
+        </div>
+        <div class="meta">${c.usable}/${c.samples} samples · ${Math.round(c.fromPercent)}–${Math.round(c.toPercent)}% ·
+          worst gap ${Math.round(c.maxGapPct)}% · ${Math.round(c.medianCostMs)} ms/sample</div>
+      </div>`;
+    }).join("");
+    host.querySelectorAll("[data-tshow]").forEach((el) => el.onclick = () => {
+      const id = el.dataset.tshow;
+      traceShown(id) ? removeOverlay(id) : addOverlay(id);
+    });
+    host.querySelectorAll("[data-tplan]").forEach((el) => el.onclick = async () => {
+      try { showDeviation(await window.nmx.traceVsPlan(el.dataset.tplan, film), `${el.dataset.tplan} vs the uploaded move`); }
+      catch (e) { $("traceResult").textContent = e.message; }
+    });
+    host.querySelectorAll("[data-tcsv]").forEach((el) => el.onclick = async () => {
+      try {
+        const p = await window.nmx.traceCsv(el.dataset.tcsv);
+        if (p) status("Recording written to " + p);
+      } catch (e) { status("Export failed: " + e.message); }
+    });
+  }
+  for (const sel of ["traceA", "traceB"]) {
+    const el = $(sel);
+    if (!el) continue;
+    const keep = el.value;
+    el.innerHTML = traceIndex.items.map((t) => `<option value="${t.id}">${t.id} (${t.engine})</option>`).join("");
+    if (traceIndex.items.some((t) => t.id === keep)) el.value = keep;
+  }
+}
+
+/** One line per axis, and the honest reading of the number underneath. */
+function showDeviation(r, title) {
+  const host = $("traceResult");
+  /* Wording comes from the core (window.trace), so the modal and the bring-up
+     report cannot end up describing the same number two different ways. */
+  const lines = window.trace.deviationLines(r);
+  host.textContent = r?.ok
+    ? [title, `compared over ${Math.round(r.fromPercent)}–${Math.round(r.toPercent)}%, ${r.comparedPoints} points`, ...lines].join("\n")
+    : [title, ...lines].join("\n");
+}
+
+$("traceCfg").onclick = async () => { await refreshTraces(); $("traceModal").classList.add("open"); };
+$("traceCompare").onclick = async () => {
+  const a = $("traceA").value, b = $("traceB").value;
+  if (!a || !b) return;
+  if (a === b) { $("traceResult").textContent = "Pick two different passes — a pass compared with itself measures nothing."; return; }
+  try { showDeviation(await window.nmx.traceCompare(a, b), `${a} vs ${b}`); }
+  catch (e) { $("traceResult").textContent = e.message; }
+};
+$("traceClearOverlay").onclick = () => { overlays = []; render(); renderTraceList(); };
 
 function render() {
   const w = cv.clientWidth, h = cv.clientHeight;
@@ -1020,6 +1198,32 @@ function render() {
         started ? ctx.lineTo(x, y) : (ctx.moveTo(x, y), started = true);
       }
       ctx.stroke(); ctx.restore(); ctx.lineWidth = 1;
+    }
+
+    /* what the rig ACTUALLY did (ADR-0027).
+       Same hue as the axis, because it is the same axis — identity belongs to
+       the series (ADR-0012), and a recorded Slide drawn in some fifth colour
+       would read as a fifth thing. Provenance is carried by STYLE: dashed,
+       thinner, slightly recessed. Never colour alone, and never a new hue. */
+    for (const ov of overlays) {
+      const ser = ov.series?.[i];
+      if (!ser?.points?.length) continue;
+      ctx.save(); ctx.beginPath(); ctx.rect(r.x, r.y, r.w, r.h); ctx.clip();
+      ctx.strokeStyle = a.color; ctx.globalAlpha = .7; ctx.lineWidth = 1.25;
+      ctx.setLineDash([4, 3]); ctx.lineJoin = "round"; ctx.beginPath();
+      let on = false;
+      for (const pt of ser.points) {
+        if (pt.frame < view.f0 - 2 || pt.frame > view.f1 + 2) continue;
+        const x = fToX(pt.frame, r), y = posToY(pt.pos, r, s);
+        on ? ctx.lineTo(x, y) : (ctx.moveTo(x, y), on = true);
+      }
+      ctx.stroke(); ctx.setLineDash([]); ctx.globalAlpha = 1; ctx.restore(); ctx.lineWidth = 1;
+    }
+    /* Direct label, because a dash pattern is not self-explanatory. */
+    if (i === 0 && overlays.length) {
+      ctx.fillStyle = INK_FAINT; ctx.font = "9px ui-monospace, Menlo, monospace";
+      const tag = `${overlays.length} recorded pass${overlays.length > 1 ? "es" : ""} · dashed`;
+      ctx.fillText(tag, r.x + r.w - ctx.measureText(tag).width - 6, r.y + 10);
     }
 
     /* keyframes as diamonds — the animation-software convention */
@@ -2573,10 +2777,13 @@ $("tlRun").onclick = async () => {
     await window.nmx.cuesStart();
     logPass(`KF pass ${kfPassCount} — “${film.name}”`);
     clearInterval(pollTimer);
+    await beginRecording("keyframe", film.durationFrames);
     startPassSweep("kf", film.durationFrames);
     pollTimer = setInterval(async () => {
       try {
-        const p = await window.nmx.kfProgress();
+        /* One poll, both jobs (ADR-0027): the sample the recorder keeps IS the
+           reading the progress bar and the playhead are driven from. */
+        const p = await window.nmx.passSample("keyframe");
         $("tlProg").style.width = (p.percent ?? 0) + "%";
         anchorPassSweep(p.percent);
         if (p.state === 0 && (p.percent ?? 0) > 0) {
@@ -2584,15 +2791,16 @@ $("tlRun").onclick = async () => {
           playheadFrame = film.durationFrames;      // where the rig actually is
           syncInputs(); render();
           logPass(`KF pass ${kfPassCount} complete`);
+          await endRecording("complete");
           reportCueDelivery();
           status(`Pass ${kfPassCount} complete. ⏮ then reposition, run again.`);
         }
-      } catch { clearInterval(pollTimer); endPassSweep(); }
+      } catch { clearInterval(pollTimer); endPassSweep(); endRecording("lost"); }
     }, 500);
   } catch (e) { status("Run blocked: " + e.message); }
 };
 $("tlStop").onclick = async () => {
-  clearInterval(pollTimer); endPassSweep();
+  clearInterval(pollTimer); endPassSweep(); endRecording("stopped");
   await window.nmx.kfStop(); await window.nmx.cuesStop();
   status("Key-frame program stopped.");
 };
@@ -2621,18 +2829,21 @@ $("run").onclick = async () => {
     clearInterval(pollTimer);
     /* Swept against the CLASSIC duration, not the film's — they are different
        moves, and the ruler is a time axis either way. */
-    startPassSweep("classic", Math.max(1, Math.round(Number($("travel").value))));
+    const classicFrames = Math.max(1, Math.round(Number($("travel").value)));
+    await beginRecording("classic", classicFrames);
+    startPassSweep("classic", classicFrames);
     pollTimer = setInterval(async () => {
       try {
-        const p = await window.nmx.progress();
+        const p = await window.nmx.passSample("classic");
         $("prog").style.width = (p.percent ?? 0) + "%";
         anchorPassSweep(p.percent);
         if (!p.running && (p.percent ?? 0) > 0) {
           clearInterval(pollTimer); endPassSweep();
           logPass(`classic pass ${passCount} complete`); status(`Pass ${passCount} complete.`);
+          await endRecording("complete");
           reportCueDelivery();
         }
-      } catch { clearInterval(pollTimer); endPassSweep(); }
+      } catch { clearInterval(pollTimer); endPassSweep(); endRecording("lost"); }
     }, 500);
   } catch (e) { status("Run blocked: " + e.message); }
 };
@@ -2656,7 +2867,9 @@ $("estop").onclick = async () => {
     await window.nmx.stopAll();
     /* Freeze the playhead where the rig stopped. A sweep that carries on after
        an e-stop is the UI asserting motion that has been halted. */
-    clearInterval(pollTimer); endPassSweep();
+    clearInterval(pollTimer); endPassSweep(); endRecording("stopped");
+    /* The recording is CLOSED, not discarded. A pass that was stopped is
+       exactly the pass somebody will want to look at afterwards. */
     status("STOP ALL — broadcast stop, both engines, and every armed cue aborted.");
   }
   catch (e) { status("STOP ALL error: " + e.message); }
