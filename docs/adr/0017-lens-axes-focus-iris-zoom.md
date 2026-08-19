@@ -1,6 +1,9 @@
 # ADR-0017: Lens axes (focus / iris / zoom) — normalised travel, mapped by witness marks, driven device-side
 
-**Status:** Accepted (schema, solver, timeline lanes, lens maps and 3D export landed in v0.10; the FIZ device driver is specified here and implemented next)
+**Status:** Accepted — **partially superseded by [ADR-0018](0018-lens-device-protocol-v2.md)**
+(schema, solver, timeline lanes, lens maps and 3D export landed in v0.10; §4's device
+driver was built in v0.11, and §1's per-axis `invert` was wrong and moved to rig
+configuration in schema v4 — see ADR-0018 §5)
 **Date:** 2026-08-18
 **Deciders:** Project owner + Claude
 

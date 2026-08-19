@@ -128,7 +128,10 @@ export function sampleLens(film: Film): LensTrack {
   for (const ax of film.lensAxes ?? []) {
     const positions = sampleLensAxis(ax, film.durationFrames);
     if (!ax.map) { out.unmapped.push(ax.kind); continue; }
-    const values = positions.map((p) => lensValueAt(ax.map!, ax.invert ? 1 - p : p));
+    /* Barrel travel straight into the map — motor handedness is rig config and
+       never touches an export (ADR-0018). A .usda that changed depending on
+       which rig encoded it would not be a camera move, it would be a rumour. */
+    const values = positions.map((p) => lensValueAt(ax.map!, p));
     if (ax.kind === "focus") out.focusMeters = values;
     else if (ax.kind === "iris") out.fStop = values;
     else out.focalLengthMm = values;
@@ -495,7 +498,7 @@ export function exportCsv(film: Film, opts: ExportOptions = {}): string {
       n(p.slideMm * mmToUnit),
       ...lensCols.flatMap(({ ax, positions }) => {
         const t = positions[p.frame] ?? 0;
-        return [n(t), ax.map ? n(lensValueAt(ax.map, ax.invert ? 1 - t : t)) : ""];
+        return [n(t), ax.map ? n(lensValueAt(ax.map, t)) : ""];
       }),
     ].join(",");
   });

@@ -217,3 +217,87 @@ rig has been re-measured since:
 
 If the scale is out by exactly 100, the unit setting is the culprit, not the
 calibration. If it is out by 2, 4, 8 or 16, it is microstepping.
+
+## Phase 7 — Lens axes: first motor, calibration, and a pull that repeats
+
+Everything in ADR-0018 is verified against a simulated barrel and a compiled-on-
+the-desktop firmware. **Nothing has moved a real lens.** This phase is where the
+reasoning meets a motor.
+
+### 7.0 — What to build first
+
+One axis. Focus. Do not wire three motors before one of them works.
+
+| part | what to get | why |
+|---|---|---|
+| driver | **TMC2209** (UART) | StallGuard4 finds the barrel stop with no switch; StealthChop is quiet next to a mic |
+| motor | NEMA-11 or NEMA-14, ~0.5–1 A | enough torque through a reduction, small enough to hang off a lens support |
+| gear | **0.8 module** pinion | the cine standard — meshes with any cine-modded lens |
+| board | Mega / RP2040 / ESP32 | an Uno's 2 kB RAM caps `MAX_LKEY` at 32 per axis |
+
+Pick the reduction so the motor's travel comfortably **exceeds** the barrel's,
+then let calibration find the real limits.
+
+### 7.1 — Bench it before it touches glass
+
+Run the motor with the pinion **off the lens**, free-spinning, and confirm:
+
+- [ ] `HELLO` reports `GRAFFIK-TRIG 2 … 3` — the app's Cues… dialog says "3 lens axes"
+- [ ] the motor turns at all, and `LSEEK` moves it both ways
+- [ ] `motor runs backwards` flips the direction it goes (this is the setting
+      that moved out of the move file in ADR-0018 §5 — set it here, once)
+
+### 7.2 — Tune StallGuard, or fit a switch
+
+With the pinion still off the lens, hold the shaft gently and watch DIAG. Set
+`SGTHRS` over UART until a light finger stops it and free running does not.
+Record the value in this file next to the motor it belongs to.
+
+**If tuning fights you, fit a limit switch instead and set
+`LENS_STOP_ACTIVE_LOW`.** The firmware does not care which it is, and an
+afternoon lost to StallGuard is an afternoon not spent shooting.
+
+### 7.3 — Calibrate against the lens
+
+Mesh the pinion. Open ⌾ Lens… → **Calibrate…**
+
+- [ ] the barrel drives to one stop, then the other, then parks at the low stop
+- [ ] the reported travel is **stable across three runs** (±0.5 % or better)
+- [ ] the barrel is not being driven hard into either stop at the end
+
+Record: `lens ____________ travel ______ steps · run 1/2/3 ______/______/______`
+
+A travel figure that wanders between runs means StallGuard is triggering on
+friction rather than the stop. Fix that before going further — every number
+downstream is scaled by it.
+
+### 7.4 — Top speed, measured not assumed
+
+Raise **Top speed** until the motor audibly loses steps against the barrel, then
+back off **30 %**. That is the figure the feasibility pre-flight uses, so an
+optimistic one turns a pre-flight warning you would have acted on into a lagging
+pull you discover in the rushes.
+
+Record: `usable top speed ______ steps/s (lost steps at ______)`
+
+### 7.5 — Does the pull repeat?
+
+The whole point. Mark the barrel with tape at one witness mark. Then, five times:
+
+1. Arm and run a pass with a focus lane that ends at 70 % travel
+2. Photograph the barrel against the tape at rest
+
+- [ ] all five photographs are indistinguishable
+- [ ] recalibrating between passes does not shift the endpoint
+
+**Threshold:** any visible difference between passes means the axis is losing
+steps — reduce top speed or increase current before trusting it in a composite.
+
+### 7.6 — Against the picture
+
+- [ ] a mapped lens reads correctly: jog to a witness mark, and the app's map
+      says what the barrel says (if it does not, the marks are wrong, not the app)
+- [ ] `STOP ALL` mid-pull stops the barrel and **holds** it — it must not home
+      and must not go slack
+- [ ] power-cycle the board mid-session: the app must refuse to run until the
+      axis is recalibrated, and say so

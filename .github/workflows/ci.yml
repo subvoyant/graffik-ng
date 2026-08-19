@@ -31,6 +31,22 @@ jobs:
           npm ci
           node cli.js info --sim
 
+      # The reference firmware is the other half of the Tier-2 contract, and it
+      # used to be the only part of the repo nothing checked. Compiling it
+      # against a host shim and driving its protocol state machine catches the
+      # class of bug that otherwise waits for a board to exist.
+      - name: Exercise the reference firmware
+        run: |
+          g++ -std=c++17 -Wall -I firmware/graffik-trig/test \
+              -o /tmp/fwtest firmware/graffik-trig/test/test_firmware.cpp
+          /tmp/fwtest
+
+      # Two implementations of one wire protocol drift, and the direction that
+      # hurts is the simulator being MORE permissive than the board: every test
+      # passes and the rig fails. It had already happened once.
+      - name: Protocol parity — simulator vs firmware
+        run: node firmware/graffik-trig/test/parity.mjs
+
   package-macos:
     needs: test
     runs-on: macos-latest

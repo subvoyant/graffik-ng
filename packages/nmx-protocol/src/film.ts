@@ -16,10 +16,14 @@ import { AxisIndex } from "./move.js";
 import {
   Timebase, DEFAULT_TIMEBASE, validateTimebase, framesToMs, msToFrames, framesToTimecode,
 } from "./timecode.js";
-import { LensAxis, validateLensAxis } from "./lens.js";
+import {
+  LensAxis, validateLensAxis, sampleLensAxis, quantizeLensPos, decimateLensPoints,
+  lensPeakRate, lensToleranceForSteps, DEFAULT_LENS_TOLERANCE_UNITS,
+  LensProgram, LensProgramPoint, LensAxisKind,
+} from "./lens.js";
 
 export const FILM_FORMAT = "graffik-ng-move";
-export const FILM_VERSION = 3;
+export const FILM_VERSION = 4;
 
 export interface FilmPoint {
   /** Whole frames from the start of the move. */
@@ -138,7 +142,8 @@ export function migrateFilm(raw: unknown): Film {
      v3 one. The version still went up rather than the field going in quietly:
      a v0.9 build loading a v3 file must REFUSE it, because silently dropping a
      focus pull on save is precisely the data loss versioning exists to stop. */
-  if (version === 2) return { ...(f as unknown as Film), version: FILM_VERSION };
+  if (version === 2) return migrateV3ToV4({ ...(f as unknown as Film), version: 3 });
+  if (version === 3) return migrateV3ToV4(f as unknown as Film);
 
   // ---- v1 (milliseconds, no timebase) ----
   const tb = DEFAULT_TIMEBASE;
@@ -270,6 +275,93 @@ export function buildCueList(f: Film): Cue[] {
       action: e.action,
     }))
     .sort((a, b) => a.atMs - b.atMs || a.id.localeCompare(b.id));
+}
+
+/**
+ * Build the device program for every lens lane (ADR-0018).
+ *
+ * The counterpart to `buildCueList`, and it lives beside it for the same
+ * reason: both cross the one boundary where frames become milliseconds
+ * (ADR-0014), and both hand a microcontroller something it can run off its own
+ * clock without the host in the loop.
+ *
+ * Sampled per frame from the SAME solver as the preview and the NMX upload
+ * (ADR-0009), then decimated under an explicit error bound. Decimation is not
+ * an optimisation for its own sake: a 30 s pull is 720 points per axis, and
+ * three axes of that is 34 kB of text down a serial line while a performer
+ * waits. Under a half-step bound a real focus pull comes out in tens of points,
+ * and the device's linear interpolation is inside the motor's own resolution —
+ * so nothing observable was given up to get there.
+ */
+export function buildLensProgram(
+  f: Film,
+  opts: { toleranceUnits?: number; motorSteps?: Partial<Record<LensAxisKind, number>> } = {},
+): LensProgram {
+  const axes = f.lensAxes ?? [];
+  const out: LensProgram = { axes: [], sampledPoints: f.durationFrames + 1, toleranceUnits: 0 };
+  const tolerances: number[] = [];
+
+  for (const ax of axes) {
+    const samples = sampleLensAxis(ax, f.durationFrames);
+    const dense: LensProgramPoint[] = samples.map((v, frame) => ({
+      ms: framesToMs(frame, f.timebase),
+      /* Barrel travel, straight through. Motor handedness is rig config and is
+         applied by the DEVICE at its DIR pin (ADR-0018) — flipping it here
+         would mean the same move file produced different motion depending on
+         which machine encoded it. */
+      pos: quantizeLensPos(v),
+    }));
+    const tol = opts.toleranceUnits ?? lensToleranceForSteps(opts.motorSteps?.[ax.kind] ?? 0);
+    tolerances.push(tol);
+    const points = decimateLensPoints(dense, tol);
+    /* Peak rate comes from the DENSE curve, deliberately. A decimated chord's
+       slope is a weighted average of the segment slopes it replaces, so it can
+       never exceed the dense maximum — measuring the dense curve is therefore
+       the conservative bound, and it means decimation can never quietly hide a
+       snap from the feasibility pre-flight. */
+    const peak = lensPeakRate(dense);
+    out.axes.push({ kind: ax.kind, points, peakUnitsPerSec: peak.unitsPerSec, peakAtMs: peak.atMs });
+  }
+  out.toleranceUnits = tolerances.length ? Math.min(...tolerances) : DEFAULT_LENS_TOLERANCE_UNITS;
+  return out;
+}
+
+/** Total points across every axis — what the device must find room for. */
+export const lensProgramSize = (p: LensProgram): number =>
+  p.axes.reduce((n, a) => n + a.points.length, 0);
+
+/**
+ * v3 -> v4: `lensAxes[].invert` moves OUT of the move file.
+ *
+ * It should never have been in it. Whether a lens motor is geared backwards is
+ * a fact about a rig on a day, and a move that carries it reverses a focus pull
+ * the moment the file is opened somewhere else — the failure ADR-0016 already
+ * moved cue bindings into preferences to avoid.
+ *
+ * The setting cannot be written to preferences from here (the core knows
+ * nothing about an app), so it is dropped and the fact is written into `notes`
+ * — the same idiom the v1 -> v2 timebase assumption uses. Saying it in the file
+ * is the difference between an operator who re-ticks one box and one who spends
+ * a take wondering why the pull runs the wrong way.
+ */
+function migrateV3ToV4(f: Film): Film {
+  const flipped = (f.lensAxes ?? [])
+    .filter((a) => (a as unknown as { invert?: boolean }).invert)
+    .map((a) => a.kind);
+  const lensAxes = f.lensAxes?.map((a) => {
+    const { ...rest } = a as LensAxis & { invert?: boolean };
+    delete (rest as { invert?: boolean }).invert;
+    return rest as LensAxis;
+  });
+  const note = flipped.length
+    ? `v3->v4: "motor runs backwards" for ${flipped.join(", ")} moved to rig settings; set it in Lens… if the pull comes out reversed.`
+    : null;
+  return {
+    ...f,
+    version: FILM_VERSION,
+    ...(lensAxes ? { lensAxes } : {}),
+    ...(note ? { notes: f.notes ? `${f.notes}\n${note}` : note } : {}),
+  };
 }
 
 /** Events whose fire frame falls in [from, to) — for host-side (Tier 1) dispatch. */

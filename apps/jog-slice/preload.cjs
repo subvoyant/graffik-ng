@@ -106,6 +106,13 @@ contextBridge.exposeInMainWorld("nmx", {
   onCueFired: (fn) => ipcRenderer.on("nmx:cue-fired", (_e, d) => fn(d)),
   onCueProblem: (fn) => ipcRenderer.on("nmx:cue-problem", (_e, d) => fn(d)),
   onTriggerInput: (fn) => ipcRenderer.on("nmx:trigger-input", (_e, d) => fn(d)),
+  // lens motors (ADR-0018) — the same board as the cues, protocol v2
+  lensStatus: () => ipcRenderer.invoke("nmx:lens-status"),
+  lensSetMotor: (kind, patch) => ipcRenderer.invoke("nmx:lens-set-motor", kind, patch),
+  lensCalibrate: (kind) => ipcRenderer.invoke("nmx:lens-calibrate", kind),
+  lensSeek: (kind, position) => ipcRenderer.invoke("nmx:lens-seek", kind, position),
+  lensCheck: (film) => ipcRenderer.invoke("nmx:lens-check", film),
+  lensUpload: (film) => ipcRenderer.invoke("nmx:lens-upload", film),
   // e-stop
   stopAll: () => ipcRenderer.invoke("nmx:stop-all"),
 });

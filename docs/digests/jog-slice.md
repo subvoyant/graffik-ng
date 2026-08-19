@@ -1,6 +1,6 @@
 # Digest: apps/jog-slice (Electron app)
 
-**Verified against** `apps/jog-slice/*` @ 2026-08-18 (v0.10) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
+**Verified against** `apps/jog-slice/*` @ 2026-08-18 (v0.11) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
 
 ## Shape
 
@@ -121,7 +121,17 @@ Layout is a fixed frame — appbar / rail(244px) / stage / statusbar — with **
 - **⌾ Lens… modal** (from the inspector) holds the lens name, the marks table (travel % → reading → barrel label), an add-mark row, `invert`, and Remove lane. Marks live in the **move file**, not yet in a reusable per-lens library.
 - `nmx:preview-lens` samples the lanes in main via the core solver, debounced 50 ms into `lensCache`, exactly like `previewMove`. The browser-preview stub has a crude smoothstep copy for layout only — never extend it.
 - Lens keys **retime** with duration and timebase changes, and the retimed tail is clamped to `durationFrames` (rounding + `MIN_GAP` could otherwise push it one frame past and get the upload rejected).
-- **Disclosure, not implication:** the band reads `(authoring + export only — no lens device yet)` and Upload appends `focus · iris NOT sent: no lens device`. Nothing drives a lens motor until ADR-0017 §4 is built.
+- **The band says what is true right now** — `(driven on device)` with a v2 board, `(authoring + export only — no lens device)` without. `lensDriven` is refreshed on boot, on trigger connect and on disconnect. A permanent "not driven" label would be the app lying in the other direction the moment hardware appeared.
+
+## Lens motors (v0.11 — ADR-0018)
+
+- **The lens device IS the trigger board.** One connection, one `GO`. There is no second port to pick.
+- Motor settings live in **`prefs.lens.motors[kind]`** = `{steps, maxStepsPerSec, invert}` — rig configuration, beside the cue bindings, for the reason ADR-0016 gave: a `.graffik` must survive being carried to another rig. `steps` is remembered **only as a hint for the pre-flight**; it is never treated as homing, because only the board knows whether it has seen a stop since power-up.
+- IPC: `nmx:lens-status` · `lens-set-motor` · `lens-calibrate` (90 s timeout of its own) · `lens-seek` · `lens-check` · `lens-upload`.
+- **`nmx:cues-arm` uploads the lens program BEFORE `ARM`.** `ARM` is what latches it and its reply carries the count the backend cross-checks; uploading after would arm an empty curve.
+- **`nmx:cue-check` returns `lensProblems` too, and `armCuesForPass` is one gate for both.** Two gates would be two chances to skip one, and both failures cost the same thing — a take.
+- ⌾ Lens… modal layout follows the *workflow*: marks table → add-mark row → **Jog** (drives the barrel and fills the "At" field, so marking is drive-read-type) → MOTOR subhead → device chip + Calibrate + travel → top speed + handedness. The jog was originally down in the motor block, which broke the marking loop and wrapped the Calibrate button onto its own line. `#lensMarkRows` is capped at 190 px and scrolls — a real lens map runs to a dozen marks and the sheet must not outgrow the window.
+- Upload status now reports the lens honestly: point count and estimated upload time with a device, `NOT sent: no lens device` without one, plus the first infeasibility if any.
 
 ## Move files vs. export (v0.7.1)
 

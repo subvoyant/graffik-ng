@@ -19,6 +19,7 @@
 
 import { Cue, EventAction } from "./film.js";
 import { PortLike } from "./client.js";
+import { LensAxisKind, LensProgram, LENS_POS_MAX } from "./lens.js";
 
 export type Tier = 1 | 2;
 
@@ -121,7 +122,44 @@ export class SimulatedTriggerBackend implements TriggerBackend {
    Serial (Arduino-class) backend — the GRAFFIK-TRIG text protocol
    ------------------------------------------------------------------ */
 
-export const TRIGGER_PROTOCOL_VERSION = 1;
+/** What this build speaks. v2 adds the lens axes (ADR-0018). */
+export const TRIGGER_PROTOCOL_VERSION = 2;
+
+/**
+ * Versions we can still talk to. ADR-0004's lesson is "never guess at a command
+ * set you do not know" — but a v1 board is a version we DO know: it runs cues
+ * correctly and simply has no lens hardware. Refusing it because the app grew a
+ * feature it does not have would break a working rig for no reason. So v1 is
+ * accepted and `supportsLens()` answers false; an unrecognised version is still
+ * refused outright.
+ */
+export const SUPPORTED_TRIGGER_PROTOCOLS: readonly number[] = [1, 2];
+
+/**
+ * Lines sent between flow-control checkpoints during a lens upload.
+ *
+ * An ATmega's UART buffer is 64 bytes. At 115 200 baud an `LKEY` line arrives
+ * in under 2 ms and parses in microseconds, so in principle the device keeps up
+ * — but "in principle the firmware is never busy" is exactly the assumption
+ * that produces a silently truncated focus curve. A sync every 32 points costs
+ * two round trips on a typical upload and converts a corrupt pull into a
+ * refusal.
+ */
+export const LENS_UPLOAD_CHUNK = 32;
+
+/** Wire index for each lens axis. Fixed so a device's pin map can be, too. */
+export const LENS_AXIS_INDEX: Record<LensAxisKind, number> = { focus: 0, iris: 1, zoom: 2 };
+
+/** How a lens motor is set up on the board. */
+export interface LensAxisConfig {
+  kind: LensAxisKind;
+  /** Barrel travel in motor steps — 0 until `calibrateLens` has run. */
+  steps: number;
+  /** Usable top speed, steps/s. Measured on the rig, not from a datasheet. */
+  maxStepsPerSec: number;
+  /** The motor is geared or mounted backwards relative to the barrel. */
+  invert: boolean;
+}
 
 /** Render an action as the device's wire form. Returns null if unsupported. */
 export function actionToWire(action: EventAction): string | null {
@@ -134,7 +172,14 @@ export function actionToWire(action: EventAction): string | null {
   }
 }
 
-export interface DeviceInfo { name: string; protocol: number; outputs: number; inputs: number }
+export interface DeviceInfo {
+  name: string;
+  protocol: number;
+  outputs: number;
+  inputs: number;
+  /** Lens axes the board can drive. v1 boards report 0. */
+  lensAxes: number;
+}
 
 /* The protocol is ASCII by definition, so encode/decode by hand rather than
    reach for Buffer or TextEncoder — the core package has zero dependencies and
@@ -219,12 +264,12 @@ export class SerialTriggerBackend implements TriggerBackend {
     }
   }
 
-  private request(line: string, match: RegExp): Promise<RegExpMatchArray> {
+  private request(line: string, match: RegExp, timeoutMs = this.timeoutMs): Promise<RegExpMatchArray> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending = this.pending.filter((p) => p.timer !== timer);
-        reject(new Error(`trigger device did not answer "${line.split(" ")[0]}" within ${this.timeoutMs} ms`));
-      }, this.timeoutMs);
+        reject(new Error(`trigger device did not answer "${line.split(" ")[0]}" within ${timeoutMs} ms`));
+      }, timeoutMs);
       this.pending.push({ match, resolve, reject, timer });
       this.write(line);
     });
@@ -234,21 +279,34 @@ export class SerialTriggerBackend implements TriggerBackend {
     this.port.write(toAscii(line + "\n"));
   }
 
-  /** Handshake. Throws on an unknown protocol version rather than guessing. */
+  /** Handshake. Throws on an UNKNOWN protocol version; an older known one is fine. */
   async hello(): Promise<DeviceInfo> {
-    const m = await this.request("HELLO", /^GRAFFIK-TRIG (\d+) (\S+) (\d+) (\d+)$/);
+    const m = await this.request("HELLO", /^GRAFFIK-TRIG (\d+) (\S+) (\d+) (\d+)(?: (\d+))?$/);
     const protocol = Number(m[1]);
-    if (protocol !== TRIGGER_PROTOCOL_VERSION) {
+    if (!SUPPORTED_TRIGGER_PROTOCOLS.includes(protocol)) {
       throw new Error(
-        `trigger device speaks protocol v${protocol}, this build speaks v${TRIGGER_PROTOCOL_VERSION} — ` +
-          "refusing rather than guessing at a command set (the same trap as ADR-0004)",
+        `trigger device speaks protocol v${protocol}; this build speaks ` +
+          `v${SUPPORTED_TRIGGER_PROTOCOLS.join("/v")} — refusing rather than guessing at a ` +
+          "command set (the same trap as ADR-0004)",
       );
     }
-    this.info = { protocol, name: m[2], outputs: Number(m[3]), inputs: Number(m[4]) };
+    this.info = {
+      protocol, name: m[2], outputs: Number(m[3]), inputs: Number(m[4]),
+      /* v1 boards do not report a lens count and do not have lens hardware. */
+      lensAxes: protocol >= 2 ? Number(m[5] ?? 0) : 0,
+    };
     return this.info;
   }
 
-  describe() { return this.info ? `${this.info.name} — ${this.info.outputs} out / ${this.info.inputs} in` : "trigger device (no handshake yet)"; }
+  describe() {
+    if (!this.info) return "trigger device (no handshake yet)";
+    const lens = this.info.lensAxes ? ` / ${this.info.lensAxes} lens` : "";
+    return `${this.info.name} — ${this.info.outputs} out / ${this.info.inputs} in${lens} (v${this.info.protocol})`;
+  }
+
+  /** A v1 cue board is perfectly good at cues and cannot pull focus. */
+  supportsLens() { return (this.info?.lensAxes ?? 0) > 0; }
+  lensAxes() { return this.info?.lensAxes ?? 0; }
   outputs() { return this.info?.outputs ?? 0; }
   supports(action: EventAction) { return actionToWire(action) !== null; }
 
@@ -274,22 +332,152 @@ export class SerialTriggerBackend implements TriggerBackend {
       this.idMap.set(numeric, cue.id);
       this.write(`CUE ${numeric} ${Math.round(cue.atMs)} ${output} ${wire}`);
     }
-    const m = await this.request("ARM", /^READY (\d+)$/);
+    const m = await this.request("ARM", /^READY (\d+)(?: (\d+))?$/);
     const accepted = Number(m[1]);
+    this.armedLensPoints = Number(m[2] ?? 0);
     if (accepted !== n) {
       throw new Error(`device accepted ${accepted} of ${n} cues — refusing to run a partial list`);
+    }
+    if (this.uploadedLensPoints && this.armedLensPoints !== this.uploadedLensPoints) {
+      throw new Error(
+        `device armed ${this.armedLensPoints} of ${this.uploadedLensPoints} lens points — ` +
+          "refusing to run a truncated focus pull",
+      );
     }
     return accepted;
   }
 
-  async start() { await this.request("GO", /^STARTED (\d+)$/); }
+  /* ----------------------------------------------------------------
+     Lens axes (protocol v2, ADR-0018)
+     ---------------------------------------------------------------- */
+
+  /** Points the last `uploadLens` sent — checked against ARM's own count. */
+  private uploadedLensPoints = 0;
+  private armedLensPoints = 0;
+
+  private requireLens() {
+    if (!this.info) throw new Error("handshake with the lens device first");
+    if (!this.supportsLens()) {
+      throw new Error(
+        `${this.info.name} speaks protocol v${this.info.protocol} with no lens axes — ` +
+          "it can run cues but cannot drive focus, iris or zoom",
+      );
+    }
+  }
+
+  /** Tell the board how a barrel's motor is set up. Idempotent. */
+  async declareLensAxis(cfg: LensAxisConfig): Promise<void> {
+    this.requireLens();
+    const n = LENS_AXIS_INDEX[cfg.kind];
+    await this.request(
+      `LAXIS ${n} ${cfg.kind} ${Math.max(0, Math.round(cfg.steps))} ` +
+        `${Math.max(0, Math.round(cfg.maxStepsPerSec))} ${cfg.invert ? 1 : 0}`,
+      new RegExp(`^LAXIS ${n} OK$`),
+    );
+  }
+
+  /**
+   * Drive the barrel to both mechanical stops and report the travel between
+   * them. This is the *only* thing that gives a stepper an absolute reference —
+   * open-loop position means nothing until it is measured against a stop — and
+   * it is what the Preston MDR does whenever a motor is connected.
+   *
+   * Given its own long timeout: a slow barrel takes many seconds, and inheriting
+   * the 1.5 s request timeout would abandon a calibration that was working.
+   */
+  async calibrateLens(kind: LensAxisKind, timeoutMs = 60_000): Promise<number> {
+    this.requireLens();
+    const n = LENS_AXIS_INDEX[kind];
+    const m = await this.request(
+      `LCAL ${n}`,
+      new RegExp(`^(?:LCAL ${n} (\\d+)|LCALERR ${n} (.+))$`),
+      timeoutMs,
+    );
+    if (m[2] !== undefined) throw new Error(`${kind} calibration failed: ${m[2]}`);
+    const steps = Number(m[1]);
+    if (!Number.isFinite(steps) || steps <= 0) {
+      throw new Error(`${kind} calibration returned ${m[1]} steps — the barrel did not move`);
+    }
+    return steps;
+  }
+
+  /**
+   * Upload the sampled curves. Chunked with a sync so a device that cannot keep
+   * up says so instead of quietly dropping the middle of a focus pull.
+   */
+  async uploadLens(program: LensProgram): Promise<number> {
+    this.requireLens();
+    this.uploadedLensPoints = 0;
+    await this.request("LCLEAR", /^LCLEAR OK$/);
+    let total = 0, sinceSync = 0, syncId = 0;
+    for (const axis of program.axes) {
+      const n = LENS_AXIS_INDEX[axis.kind];
+      for (const pt of axis.points) {
+        const pos = Math.max(0, Math.min(LENS_POS_MAX, Math.round(pt.pos)));
+        this.write(`LKEY ${n} ${Math.round(pt.ms)} ${pos}`);
+        total++;
+        if (++sinceSync >= LENS_UPLOAD_CHUNK) {
+          sinceSync = 0;
+          const id = ++syncId;
+          const m = await this.request(`LSYNC ${id}`, new RegExp(`^LSYNC ${id} (\\d+)$`));
+          if (Number(m[1]) !== total) {
+            throw new Error(`lens upload desynced: sent ${total} points, device has ${m[1]}`);
+          }
+        }
+      }
+    }
+    const m = await this.request(`LSYNC ${++syncId}`, new RegExp(`^LSYNC ${syncId} (\\d+)$`));
+    if (Number(m[1]) !== total) {
+      throw new Error(`lens upload desynced: sent ${total} points, device has ${m[1]}`);
+    }
+    this.uploadedLensPoints = total;
+    return total;
+  }
+
+  /**
+   * Park a barrel. Used to send the lens to its first key before a pass and to
+   * jog it by hand while marking. Fire-and-forget so the marking UI stays
+   * responsive under a held key.
+   */
+  seekLens(kind: LensAxisKind, pos01: number) {
+    this.requireLens();
+    const n = LENS_AXIS_INDEX[kind];
+    const pos = Math.max(0, Math.min(LENS_POS_MAX, Math.round(pos01 * LENS_POS_MAX)));
+    this.write(`LSEEK ${n} ${pos}`);
+  }
+
+  /**
+   * Start the pass on the device's clock.
+   *
+   * `LERR` is accepted as an answer here on purpose. A stepper that has not
+   * been homed since power-up has no idea where the barrel is, so running a
+   * curve would drive it into a stop at speed. The device refuses instead of
+   * starting, and this turns that refusal into a sentence the operator can act
+   * on rather than a timeout they have to guess at.
+   */
+  async start() {
+    const m = await this.request("GO", /^(?:STARTED (\d+)|LERR (\d+) (.+))$/);
+    if (m[3] !== undefined) {
+      const kind = (Object.keys(LENS_AXIS_INDEX) as LensAxisKind[])
+        .find((k) => LENS_AXIS_INDEX[k] === Number(m[2])) ?? `axis ${m[2]}`;
+      throw new Error(`device refused to start: ${kind} ${m[3]}`);
+    }
+  }
 
   /**
    * Cancel armed and running cues. Deliberately fire-and-forget: the e-stop
    * path must not be able to hang waiting for an acknowledgement from a device
    * that may be the thing that has gone wrong.
    */
-  async abort() { this.write("ABORT"); }
+  async abort() {
+    this.write("ABORT");
+    /* The device holds the barrel where it stopped (ADR-0017 §4) — a focus ring
+       that free-wheels on an e-stop is a way to lose a lens. But the uploaded
+       program is gone, so forget it here too: the next ARM must not "pass" by
+       comparing against a count from a run that was abandoned. */
+    this.uploadedLensPoints = 0;
+    this.armedLensPoints = 0;
+  }
 
   async close() {
     for (const p of this.pending) clearTimeout(p.timer);
@@ -395,13 +583,31 @@ export class SimulatedTriggerDevice implements PortLike {
   private runningFrom: number | null = null;
   private nextCue = 0;
 
+  /* --- lens side (protocol v2) --- */
+  private lensCfg = new Map<number, { kind: string; steps: number; maxSps: number; invert: boolean }>();
+  private lensPending: Array<{ axis: number; ms: number; pos: number }> = [];
+  private lensCurve: Array<{ axis: number; ms: number; pos: number }> = [];
+  /** Where each barrel is, 0..65535. Survives ABORT on purpose. */
+  readonly lensPos = new Map<number, number>();
+  /** Barrel travel LCAL will report. Settable so tests can drive the failure. */
+  calibrationSteps: number | null = 4000;
+  /** Drop every Nth uploaded point, to exercise the desync refusal. */
+  lensDropEvery: number | null = null;
+  private lensSeen = 0;
+
   /** Everything the device "did", for assertions. */
   readonly performed: Array<{ out: number; wire: string; deviceMs: number; id?: number }> = [];
   /** Set to reject the next ARM with a short count, to test the partial path. */
   acceptLimit: number | null = null;
 
   /** Overridable so tests can drive the version-mismatch refusal path. */
-  constructor(public name = "sim-trig", public outs = 8, public ins = 2, public protocol = TRIGGER_PROTOCOL_VERSION) {}
+  constructor(
+    public name = "sim-trig",
+    public outs = 8,
+    public ins = 2,
+    public protocol = TRIGGER_PROTOCOL_VERSION,
+    public lens = 3,
+  ) {}
 
   write(data: Uint8Array | string, cb?: (err?: Error | null) => void) {
     this.rx += typeof data === "string" ? data : fromAscii(data);
@@ -429,7 +635,13 @@ export class SimulatedTriggerDevice implements PortLike {
     const [verb, ...rest] = line.split(/\s+/);
     switch (verb) {
       case "HELLO":
-        this.say(`GRAFFIK-TRIG ${this.protocol} ${this.name} ${this.outs} ${this.ins}`);
+        /* A v1 board has no lens field at all — not a zero. Emitting the field
+           anyway would make the v1 path untestable, and the v1 path is the one
+           that protects an owner who already built a cue board. */
+        this.say(
+          `GRAFFIK-TRIG ${this.protocol} ${this.name} ${this.outs} ${this.ins}` +
+            (this.protocol >= 2 ? ` ${this.lens}` : ""),
+        );
         break;
       case "CLEAR":
         this.pendingCues = []; this.cues = []; this.runningFrom = null; this.nextCue = 0;
@@ -443,7 +655,56 @@ export class SimulatedTriggerDevice implements PortLike {
         const limit = this.acceptLimit ?? this.pendingCues.length;
         this.cues = this.pendingCues.slice(0, limit).sort((a, b) => a.atMs - b.atMs);
         this.nextCue = 0;
-        this.say(`READY ${this.cues.length}`);
+        this.lensCurve = [...this.lensPending].sort((a, b) => a.axis - b.axis || a.ms - b.ms);
+        this.say(
+          `READY ${this.cues.length}` + (this.protocol >= 2 ? ` ${this.lensCurve.length}` : ""),
+        );
+        break;
+      }
+      case "LAXIS": {
+        const [n, kind, steps, maxSps, invert] = rest;
+        /* Refuse an axis this board does not have, exactly as the firmware
+           does. A simulator that is more permissive than the hardware is worse
+           than no simulator: it turns "passes in tests, fails on the rig" into
+           the default outcome. The parity check enforces this pairing. */
+        if (Number(n) >= this.lens) { this.say(`ERR no axis ${Number(n)}`); break; }
+        this.lensCfg.set(Number(n), {
+          kind, steps: Number(steps), maxSps: Number(maxSps), invert: invert === "1",
+        });
+        this.say(`LAXIS ${Number(n)} OK`);
+        break;
+      }
+      case "LCAL": {
+        const n = Number(rest[0]);
+        if (n >= this.lens) { this.say(`LCALERR ${n} no such axis`); break; }
+        if (this.calibrationSteps === null) { this.say(`LCALERR ${n} barrel did not reach a stop`); break; }
+        const cfg = this.lensCfg.get(n);
+        if (cfg) cfg.steps = this.calibrationSteps;
+        /* A real board ends calibration parked at one stop, and the host has to
+           know that — a curve starting mid-barrel would slam on GO otherwise. */
+        this.lensPos.set(n, 0);
+        this.say(`LCAL ${n} ${this.calibrationSteps}`);
+        break;
+      }
+      case "LCLEAR":
+        this.lensPending = []; this.lensCurve = []; this.lensSeen = 0;
+        this.say("LCLEAR OK");
+        break;
+      case "LKEY": {
+        const [n, ms, pos] = rest;
+        if (Number(n) >= this.lens) break;              // firmware drops it silently
+        this.lensSeen++;
+        if (this.lensDropEvery && this.lensSeen % this.lensDropEvery === 0) break;   // simulate a lost line
+        this.lensPending.push({ axis: Number(n), ms: Number(ms), pos: Number(pos) });
+        break;
+      }
+      case "LSYNC":
+        this.say(`LSYNC ${Number(rest[0])} ${this.lensPending.length}`);
+        break;
+      case "LSEEK": {
+        const [n, pos] = rest;
+        if (Number(n) >= this.lens) break;
+        this.lensPos.set(Number(n), Number(pos));
         break;
       }
       case "GO":
@@ -453,6 +714,9 @@ export class SimulatedTriggerDevice implements PortLike {
         break;
       case "ABORT":
         this.runningFrom = null; this.cues = []; this.pendingCues = []; this.nextCue = 0;
+        /* Lens motion stops and the program is discarded — but `lensPos` is
+           NOT touched. ADR-0017 §4: abort holds, never homes, never releases. */
+        this.lensPending = []; this.lensCurve = []; this.lensSeen = 0;
         break;
       case "FIRE": {
         const [out, ...action] = rest;
@@ -469,6 +733,13 @@ export class SimulatedTriggerDevice implements PortLike {
     this.clockMs += dtMs;
     if (this.runningFrom === null) return;
     const elapsed = this.clockMs - this.runningFrom;
+    /* Lens axes track the uploaded curve by linear interpolation — the same
+       thing the firmware's step loop does, and the reason the host is allowed
+       to decimate: the error bound is stated against exactly this. */
+    for (const axis of new Set(this.lensCurve.map((p) => p.axis))) {
+      const pts = this.lensCurve.filter((p) => p.axis === axis);
+      this.lensPos.set(axis, interpolateAt(pts, elapsed));
+    }
     while (this.nextCue < this.cues.length && this.cues[this.nextCue].atMs <= elapsed) {
       const c = this.cues[this.nextCue++];
       this.performed.push({ out: c.out, wire: c.wire, deviceMs: this.clockMs, id: c.id });
@@ -482,4 +753,30 @@ export class SimulatedTriggerDevice implements PortLike {
 
   /** Simulate a GPI edge — a camera run signal, a foot switch. */
   input(n: number, edge: "RISE" | "FALL") { this.say(`IN ${n} ${edge} ${this.clockMs}`); }
+
+  /** Lens position as a travel fraction, for readable assertions. */
+  lensTravel(kind: LensAxisKind): number {
+    return (this.lensPos.get(LENS_AXIS_INDEX[kind]) ?? 0) / LENS_POS_MAX;
+  }
+}
+
+/**
+ * Where a piecewise-linear curve is at `ms`. Clamps outside its own range,
+ * which is the honest behaviour for a lens: before the move starts and after it
+ * ends the barrel simply holds the end value rather than extrapolating off the
+ * stop.
+ */
+function interpolateAt(points: Array<{ ms: number; pos: number }>, ms: number): number {
+  if (!points.length) return 0;
+  if (ms <= points[0].ms) return points[0].pos;
+  const last = points[points.length - 1];
+  if (ms >= last.ms) return last.pos;
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i], b = points[i + 1];
+    if (ms >= a.ms && ms <= b.ms) {
+      const t = b.ms === a.ms ? 0 : (ms - a.ms) / (b.ms - a.ms);
+      return Math.round(a.pos + (b.pos - a.pos) * t);
+    }
+  }
+  return last.pos;
 }

@@ -1,0 +1,26 @@
+# One command per line, fed to BOTH the TypeScript simulated device and the C++
+# reference firmware. Their replies must match exactly (timestamps normalised).
+# Lines starting with # are comments; blank lines are skipped.
+#
+# Add a case here whenever the protocol grows. This file is the contract.
+HELLO
+LAXIS 0 focus 0 3000 0
+LAXIS 1 iris 0 2000 1
+LAXIS 9 focus 0 3000 0
+LCAL 9
+LCLEAR
+LKEY 0 0 0
+LKEY 0 2000 65535
+LKEY 0 4000 32768
+LKEY 9 0 100
+LSYNC 7
+LSEEK 9 500
+LCAL 0
+ARM
+GO
+CLEAR
+CUE 1 100 1 PULSE 40
+CUE 2 500 2 LEVEL 128
+ARM
+ABORT
+NONSENSE

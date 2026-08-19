@@ -1,6 +1,6 @@
 # Digest: @graffik-ng/nmx-protocol
 
-**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-18 (v0.10) · 214 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
+**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-18 (v0.11) · 248 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
 
 ## packet.ts — codec
 
@@ -46,13 +46,14 @@ Namespaces returning `Packet`: `general` (sub 0), `motors` (1–3, `Motor = 1|2|
 - `timecodeToFrames` **rejects** timecodes DF skips (`00:01:00;00`) — they do not exist, and accepting one hides a typo. Accepts `HH:MM:SS:FF`, `MM:SS:FF`, `SS:FF`, and a bare integer.
 - `retimeFrames(f, from, to)` preserves REAL TIME across a timebase change — the rig's behaviour is what must not move.
 
-## film.ts — move persistence (ADR-0010, ADR-0014, ADR-0016, ADR-0017)
+## film.ts — move persistence (ADR-0010, ADR-0014, ADR-0016, ADR-0017, ADR-0018)
 
-- **v3 schema (frames):** `{format, version:3, name, timebase, durationFrames, cueFrames, startFrame, engine, axes:[{axis, points:[{frame,position,velocity?}]}], lensAxes?, events?, savedAt?, notes?}`. `startFrame` = timecode of frame 0, so a move lines up with the camera.
+- **v4 schema (frames):** `{format, version:4, name, timebase, durationFrames, cueFrames, startFrame, engine, axes:[{axis, points:[{frame,position,velocity?}]}], lensAxes?, events?, savedAt?, notes?}`. `startFrame` = timecode of frame 0, so a move lines up with the camera.
 - **Protocol boundary — the only place ms appear:** `filmDurationMs`, `filmCueMs`, `filmAxesToMs`. Rounding is ≤0.5 ms on an absolute abscissa, so it cannot accumulate.
 - `migrateFilm` v1→v2 assumes **24 fps** (v1 carried no timebase), preserves real duration exactly, and writes the assumption into `notes` rather than hiding it.
 - Validation: whole-frame keyframes, strictly increasing, within 0..durationFrames, ≥2 points/axis, legal timebase. Errors are operator-facing sentences.
-- `migrateFilm` v2→v3 only ADDS optional `lensAxes` — and the version went up anyway, so a v0.9 build **refuses** a v3 file instead of opening it with the focus pull silently gone.
+- `migrateFilm` v2→v3 only ADDS optional `lensAxes`; **v3→v4 REMOVES `lensAxes[].invert`** (ADR-0018 §5 — motor handedness is rig config, not part of a move) and writes the fact into `notes`, the same idiom as the v1→v2 timebase assumption. Versions go up even for additive changes so an older build **refuses** the file rather than opening it with the focus pull silently gone.
+- `buildLensProgram(film, {toleranceUnits?, motorSteps?})` — the lens counterpart to `buildCueList`, and it lives beside it because both cross the frames→ms boundary. Samples per frame from the shared solver, quantises to 0..65535, then **decimates** under an explicit vertical error bound (half a motor step by default): 1731 dense points → ~132 for a three-lane 24 s move. `lensProgramSize` reports the total. Peak rate is taken from the **dense** curve so decimation cannot hide a snap from the pre-flight.
 - `validateLensAxes(film)` rejects duplicate kinds (one focus lane, not two).
 - **Events (ADR-0016):** `FilmEvent {id, frame, durationFrames?, target, action, label?}`; `target` is a LOGICAL name so files stay portable between rigs. `buildCueList(film)` → device cue list in ms, sorted (Tier 2); `eventsInWindow(film, from, to)` → host dispatch, upper bound exclusive (Tier 1).
 
@@ -79,7 +80,9 @@ Namespaces returning `Packet`: `general` (sub 0), `motors` (1–3, `Motor = 1|2|
 - `formatLensValue(axis, position)` returns `"42%"` when there is no map. It never fabricates a distance.
 - `sampleLensAxis(axis, durationFrames)` calls `computeVelocities`/`splineAt` — the SAME solver as motion (ADR-0009) — then clamps to 0..1. No second easing implementation exists.
 - `validateLensMap` (≥2 marks, positions in 0..1, strictly increasing) / `validateLensAxis` (whole frames, increasing, in range, ≥2 keys). `newLensAxis` starts flat at mid-travel.
-- **Nothing drives a lens motor yet.** ADR-0017 §4 specifies GRAFFIK-TRIG protocol v2 (`LAXIS`/`LCAL`/`LKEY`/`LSEEK`, device-side execution, one `GO`); it is not implemented. The app discloses this rather than implying otherwise.
+- **There is deliberately no `invert` on a `LensAxis`** (ADR-0018 §5). The move describes the BARREL; motor handedness is rig config in preferences, declared to the board with `LAXIS`, and applied by the firmware at its DIR pin. Nothing between the two flips anything — not display, not export, not the wire program.
+- `decimateLensPoints(points, tol)` — Douglas–Peucker with a **VERTICAL** error metric, iterative not recursive. Perpendicular distance would mix ms and travel units into one number whose answer changes with your choice of time unit; vertical distance bounds exactly "how far the device's linear interpolation can be from the spline", in the units the wire uses. **The firmware may only interpolate linearly** — the bound is stated against that.
+- `lensPeakRate` / `lensFeasibility(program, limits)` — the pre-flight. Flags a lane with no motor, an uncalibrated barrel, and a pull that outruns the motor's measured top speed (naming the axis, the speed and the moment). `lensToleranceForSteps` derives the bound from calibrated travel; `DEFAULT_LENS_TOLERANCE_UNITS` = 32 when uncalibrated.
 
 ## limits.ts — soft travel limits (ADR-0013)
 
@@ -97,6 +100,16 @@ Namespaces returning `Packet`: `general` (sub 0), `motors` (1–3, `Motor = 1|2|
 - `CueScheduler` (Tier 1) takes **injected time** (`advanceTo(elapsedMs)`), so it is deterministic under test and timer-driven in the app. It **fires late cues rather than dropping them** (a missed cue light is invisible; a late one is explicable), survives one cue throwing, and exposes `worstJitterMs()` — the Tier-1 caveat as a measured number. `unroutable()` reports undeliverable cues **before** the pass.
 - `actionToWire` covers `pulse`/`level`/`dmx`; `camera`/`midi`/`osc` return null and are skipped rather than sent as garbage. Levels are clamped to 0–255.
 - ASCII encode/decode is hand-rolled — the core has zero deps and must typecheck without Node or DOM lib types, so no `Buffer`, no `TextEncoder`.
+
+### trigger.ts, protocol v2 (ADR-0018)
+
+- `TRIGGER_PROTOCOL_VERSION = 2`; `SUPPORTED_TRIGGER_PROTOCOLS = [1, 2]`. A **v1 board is still accepted** — it runs cues correctly and simply has no lens hardware, so `supportsLens()` answers false. An unrecognised version is still refused (ADR-0004).
+- `HELLO` reply gained an optional 5th field (lens axis count); `READY` gained an optional 2nd (lens point count). Both regexes accept the v1 form.
+- `declareLensAxis` / `calibrateLens(kind, timeoutMs=60s)` / `uploadLens(program)` / `seekLens(kind, 0..1)`. `LENS_AXIS_INDEX = {focus:0, iris:1, zoom:2}` — fixed so a board's pin map can be.
+- **Upload is chunked** (`LENS_UPLOAD_CHUNK = 32`) with an `LSYNC` handshake, and `arm()` cross-checks its `READY` lens count against what `uploadLens` sent. Over-capacity and lost lines both surface as a refusal; there is no path where a truncated focus pull runs.
+- `start()` accepts `LERR <n> <reason>` as an answer to `GO` and throws it as a sentence. An axis that has not homed since power-up refuses to run — open-loop position means nothing without a stop.
+- `abort()` clears the host's uploaded-point count (the device holds the barrel; ADR-0018 §6), so the next `ARM` cannot pass by comparing against an abandoned run.
+- `SimulatedTriggerDevice` gained the whole lens side: `calibrationSteps` (settable to `null` to drive the failure path), `lensDropEvery` (to drive the desync refusal), `lensPos` / `lensTravel(kind)` which **survive ABORT on purpose**. It must stay **exactly as strict as the firmware** — see the parity check in `firmware/graffik-trig/test/`.
 
 ## dmx.ts — DMX512 via Enttec DMX USB Pro (ADR-0016)
 

@@ -21,4 +21,5 @@ Immutable decision records. Accepted = in force. Supersede, never edit. See ADR-
 | [0014](0014-timecode-and-timebase.md) | Frames are the authoring unit; SMPTE timecode is the display | Accepted |
 | [0015](0015-3d-export-usd-and-chan.md) | 3D camera export via OpenUSD + `.chan`, not Alembic | Accepted (calibration pending hardware) |
 | [0016](0016-timeline-events-and-trigger-backends.md) | Timeline events; host- vs device-scheduled tiers | Accepted (backends staged) |
-| [0017](0017-lens-axes-focus-iris-zoom.md) | Lens axes: normalised travel + witness marks, driven device-side | Accepted (FIZ firmware specified, not built) |
+| [0017](0017-lens-axes-focus-iris-zoom.md) | Lens axes: normalised travel + witness marks, driven device-side | Accepted (§5 motor `invert` superseded by 0018) |
+| [0018](0018-lens-device-protocol-v2.md) | GRAFFIK-TRIG v2: decimated lens curves, mandatory calibration, schema v4 | Accepted (unverified against a motor) |

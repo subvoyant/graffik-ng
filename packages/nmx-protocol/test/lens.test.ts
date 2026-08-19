@@ -137,7 +137,7 @@ describe("validation", () => {
   });
 });
 
-describe("film integration (schema v3)", () => {
+describe("film integration (schema v4)", () => {
   const withLens = () => {
     const f = newFilm("Focus pull", 240, TB_24);
     const focus = newLensAxis("focus", 240);
@@ -152,18 +152,39 @@ describe("film integration (schema v3)", () => {
     expect(deserializeFilm(serializeFilm(f))).toEqual(f);
   });
 
-  it("is schema v3 — an older build must REFUSE, not silently drop the focus", () => {
-    expect(FILM_VERSION).toBe(3);
+  it("is schema v4 — an older build must REFUSE, not silently drop the focus", () => {
+    expect(FILM_VERSION).toBe(4);
     const f = withLens();
-    expect(() => serializeFilm({ ...f, version: 4 })).toThrow(/newer than this app/);
+    expect(() => serializeFilm({ ...f, version: FILM_VERSION + 1 })).toThrow(/newer than this app/);
   });
 
-  it("accepts a v2 file unchanged and stamps it v3", () => {
+  it("carries a v2 file forward with no lens lanes invented", () => {
     const v2 = { ...newFilm("old", 240, TB_24), version: 2 };
     delete (v2 as { lensAxes?: unknown }).lensAxes;
     const f = deserializeFilm(JSON.stringify(v2));
-    expect(f.version).toBe(3);
+    expect(f.version).toBe(FILM_VERSION);
     expect(f.lensAxes).toBeUndefined();
+  });
+
+  /**
+   * v3 briefly stored "motor runs backwards" on the axis. That is a fact about
+   * a rig, not about a move, and a file carrying it reverses somebody else's
+   * focus pull. v4 strips it — and SAYS SO in the file, because a setting that
+   * vanishes silently is worse than one that was never there.
+   */
+  it("strips v3's per-axis invert and writes the fact into the file", () => {
+    const v3 = { ...withLens(), version: 3 } as Record<string, unknown>;
+    (v3.lensAxes as Array<Record<string, unknown>>)[0].invert = true;
+    const f = deserializeFilm(JSON.stringify(v3));
+    expect(f.version).toBe(FILM_VERSION);
+    expect((f.lensAxes![0] as Record<string, unknown>).invert).toBeUndefined();
+    expect(f.notes).toMatch(/motor runs backwards.*focus.*rig settings/i);
+  });
+
+  it("says nothing when a v3 file had no inverted axis", () => {
+    const v3 = { ...withLens(), version: 3 };
+    const f = deserializeFilm(JSON.stringify(v3));
+    expect(f.notes ?? "").not.toMatch(/motor runs backwards/);
   });
 
   it("rejects two axes of the same kind", () => {

@@ -69,9 +69,23 @@ export interface LensAxis {
   keys: LensKey[];
   /** Marks for this axis, if the lens has been mapped. */
   map?: LensMap;
-  /** Flip if the motor runs the opposite way to the barrel's scale. */
-  invert?: boolean;
 }
+
+/*
+ * There is deliberately NO `invert` here.
+ *
+ * Which way a motor turns to move the barrel one way is a fact about how that
+ * motor is mounted on that rig today — it is rig configuration, and it lives in
+ * preferences beside the cue target bindings, for exactly the reason ADR-0016
+ * gave for those: a move file has to survive being carried to another rig. A
+ * v3 file did carry `invert` on the axis; v4 moved it out, because the version
+ * where a saved focus pull silently runs backwards on someone else's rig is the
+ * version nobody can debug.
+ *
+ * Downstream of here nothing flips anything: the move describes the BARREL, the
+ * motor config describes the MOTOR, and the firmware reconciles the two at the
+ * DIR pin where the handedness actually lives.
+ */
 
 export const LENS_UNITS: Record<LensAxisKind, { unit: string; label: string }> = {
   focus: { unit: "m", label: "Focus" },
@@ -144,7 +158,7 @@ export function lensPositionFor(map: LensMap, value: number): number {
 /** Display string in the axis's natural unit, or a percentage without a map. */
 export function formatLensValue(axis: LensAxis, position: number): string {
   if (!axis.map) return `${Math.round(position * 100)}%`;
-  const v = lensValueAt(axis.map, position);
+  const v = lensValueAt(axis.map, position);   // barrel travel in, reading out — no flip
   const u = LENS_UNITS[axis.kind];
   if (axis.kind === "iris") return `T${v.toFixed(1)}`;
   if (axis.kind === "zoom") return `${Math.round(v)}${u.unit}`;
@@ -213,3 +227,175 @@ export function newLensAxis(kind: LensAxisKind, durationFrames: number): LensAxi
     keys: [{ frame: 0, position: 0.5 }, { frame: durationFrames, position: 0.5 }],
   };
 }
+
+/* ==================================================================
+   Device programs (ADR-0018)
+
+   Everything above describes a lens axis. Everything below turns one
+   into something a microcontroller can execute off its own clock —
+   which is the only way a focus pull repeats between passes
+   (ADR-0005 / ADR-0016 / ADR-0017 §4).
+   ================================================================== */
+
+/**
+ * Positions go on the wire as 16-bit integers. 65 536 steps of resolution is
+ * ~16× finer than any lens motor's actual travel, so quantisation is never the
+ * limiting error, and an integer parses on an ATmega in microseconds where a
+ * float does not.
+ */
+export const LENS_POS_MAX = 65535;
+
+export const quantizeLensPos = (p: number): number =>
+  Math.max(0, Math.min(LENS_POS_MAX, Math.round(clamp01(p) * LENS_POS_MAX)));
+
+export interface LensProgramPoint {
+  /** Milliseconds from the start of the move. */
+  ms: number;
+  /** Quantised travel, 0..65535. */
+  pos: number;
+}
+
+export interface LensProgramAxis {
+  kind: LensAxisKind;
+  points: LensProgramPoint[];
+  /** Fastest travel the curve demands, in travel-units per second. */
+  peakUnitsPerSec: number;
+  /** Where that peak occurs — the moment to look at when it is too fast. */
+  peakAtMs: number;
+}
+
+export interface LensProgram {
+  axes: LensProgramAxis[];
+  /** Points before decimation, per axis — for reporting the compression. */
+  sampledPoints: number;
+  toleranceUnits: number;
+}
+
+/**
+ * Douglas–Peucker with a VERTICAL error metric.
+ *
+ * The usual perpendicular-distance form would mix milliseconds and travel
+ * units in one distance, which is meaningless — the answer would change if you
+ * expressed the move in seconds instead. Vertical distance measures exactly the
+ * thing worth bounding: *how far the device's linear interpolation can be from
+ * the spline the operator drew, at any instant.* Under `toleranceUnits`, and a
+ * focus pull is faithful; the units are the same 0..65535 the wire uses, so the
+ * bound can be stated in motor steps once the barrel is calibrated.
+ *
+ * Iterative rather than recursive: a 30-second move at 60 fps is 1800 points,
+ * and a degenerate curve would recurse 1800 deep on a stack we do not control.
+ */
+export function decimateLensPoints(points: LensProgramPoint[], toleranceUnits: number): LensProgramPoint[] {
+  if (points.length <= 2) return [...points];
+  const tol = Math.max(0, toleranceUnits);
+  const keep = new Array<boolean>(points.length).fill(false);
+  keep[0] = keep[points.length - 1] = true;
+
+  const stack: Array<[number, number]> = [[0, points.length - 1]];
+  while (stack.length) {
+    const [lo, hi] = stack.pop()!;
+    if (hi - lo < 2) continue;
+    const a = points[lo], b = points[hi];
+    const span = b.ms - a.ms;
+    let worst = -1, worstAt = -1;
+    for (let i = lo + 1; i < hi; i++) {
+      const t = span === 0 ? 0 : (points[i].ms - a.ms) / span;
+      const lerp = a.pos + (b.pos - a.pos) * t;
+      const err = Math.abs(points[i].pos - lerp);
+      if (err > worst) { worst = err; worstAt = i; }
+    }
+    if (worst > tol && worstAt > 0) {
+      keep[worstAt] = true;
+      stack.push([lo, worstAt], [worstAt, hi]);
+    }
+  }
+  return points.filter((_, i) => keep[i]);
+}
+
+/** Peak rate of change, and when. Used to pre-flight against motor top speed. */
+export function lensPeakRate(points: LensProgramPoint[]): { unitsPerSec: number; atMs: number } {
+  let peak = 0, at = 0;
+  for (let i = 1; i < points.length; i++) {
+    const dt = points[i].ms - points[i - 1].ms;
+    if (dt <= 0) continue;
+    const rate = (Math.abs(points[i].pos - points[i - 1].pos) * 1000) / dt;
+    if (rate > peak) { peak = rate; at = points[i - 1].ms; }
+  }
+  return { unitsPerSec: peak, atMs: at };
+}
+
+/** What the operator told us about the motor on each barrel. */
+export interface LensMotorLimit {
+  /** Barrel travel in motor steps, from `LCAL`. 0 = not calibrated. */
+  steps: number;
+  /** The motor's usable top speed, steps/s — measured, not from a datasheet. */
+  maxStepsPerSec: number;
+}
+
+export interface LensInfeasibility {
+  kind: LensAxisKind;
+  reason: string;
+  requiredStepsPerSec: number;
+  maxStepsPerSec: number;
+  atMs: number;
+}
+
+/**
+ * Pre-flight: can the motors actually do this pull?
+ *
+ * A curve is just a drawing until a motor has to follow it, and a lens motor
+ * has a top speed a long way below a slider's. Discovering that the snap focus
+ * at 00:14 was slewing at 6 000 steps/s on a 4 000 step/s motor belongs BEFORE
+ * the take, next to `CueScheduler.unroutable()` — not in a log afterwards, and
+ * certainly not in the rushes.
+ */
+export function lensFeasibility(
+  program: LensProgram,
+  limits: Partial<Record<LensAxisKind, LensMotorLimit>>,
+): LensInfeasibility[] {
+  const out: LensInfeasibility[] = [];
+  for (const axis of program.axes) {
+    const lim = limits[axis.kind];
+    if (!lim) {
+      out.push({
+        kind: axis.kind, reason: `${axis.kind} has no motor configured on the lens device`,
+        requiredStepsPerSec: 0, maxStepsPerSec: 0, atMs: 0,
+      });
+      continue;
+    }
+    if (!lim.steps) {
+      out.push({
+        kind: axis.kind, reason: `${axis.kind} is not calibrated — run Calibrate so the device knows the barrel's travel`,
+        requiredStepsPerSec: 0, maxStepsPerSec: lim.maxStepsPerSec, atMs: 0,
+      });
+      continue;
+    }
+    /* units -> steps: the whole 0..65535 span IS the barrel, so one unit is
+       steps/65535 of it. */
+    const required = (axis.peakUnitsPerSec * lim.steps) / LENS_POS_MAX;
+    if (lim.maxStepsPerSec > 0 && required > lim.maxStepsPerSec) {
+      out.push({
+        kind: axis.kind,
+        reason:
+          `${axis.kind} needs ${Math.round(required)} steps/s at ${(axis.peakAtMs / 1000).toFixed(2)}s ` +
+          `but the motor tops out at ${lim.maxStepsPerSec} — the pull will lag, not clip`,
+        requiredStepsPerSec: Math.round(required), maxStepsPerSec: lim.maxStepsPerSec, atMs: axis.peakAtMs,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * Tolerance in travel units for a given barrel. One motor step is the finest
+ * distinction the hardware can make, so allowing half of one is free accuracy;
+ * anything tighter just spends upload bytes on numbers the motor cannot reach.
+ */
+export const lensToleranceForSteps = (steps: number): number =>
+  steps > 0 ? Math.max(1, LENS_POS_MAX / (2 * steps)) : DEFAULT_LENS_TOLERANCE_UNITS;
+
+/**
+ * ~0.05 % of travel. Used when the barrel has not been calibrated yet, chosen
+ * to be finer than any plausible lens motor rather than tuned to one.
+ */
+export const DEFAULT_LENS_TOLERANCE_UNITS = 32;

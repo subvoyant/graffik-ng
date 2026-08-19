@@ -147,7 +147,7 @@ describe("serial backend against the simulated device (Tier 2)", () => {
 
   it("handshakes and reports the device's capabilities", async () => {
     const { be, info } = await connect();
-    expect(info).toEqual({ protocol: TRIGGER_PROTOCOL_VERSION, name: "bench-trig", outputs: 6, inputs: 2 });
+    expect(info).toEqual({ protocol: TRIGGER_PROTOCOL_VERSION, name: "bench-trig", outputs: 6, inputs: 2, lensAxes: 3 });
     expect(be.outputs()).toBe(6);
     expect(be.describe()).toContain("bench-trig");
     expect(be.tier).toBe(2);
@@ -158,7 +158,11 @@ describe("serial backend against the simulated device (Tier 2)", () => {
     // eras is worse than no connection, because it moves things unexpectedly.
     const dev = new SimulatedTriggerDevice("future-trig", 8, 2, TRIGGER_PROTOCOL_VERSION + 1);
     const be = new SerialTriggerBackend(dev, 200);
-    await expect(be.hello()).rejects.toThrow(/speaks protocol v2, this build speaks v1/);
+    // Version-agnostic on purpose: this assertion is about the REFUSAL, and
+    // pinning the numbers made it rot the moment the protocol grew to v2.
+    await expect(be.hello()).rejects.toThrow(
+      new RegExp(`speaks protocol v${TRIGGER_PROTOCOL_VERSION + 1}`),
+    );
     await expect(be.hello()).rejects.toThrow(/refusing rather than guessing/);
   });
 

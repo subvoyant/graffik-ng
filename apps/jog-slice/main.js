@@ -20,6 +20,7 @@ import {
   buildCueList, SimulatedTriggerBackend, SerialTriggerBackend, SimulatedTriggerDevice, CueScheduler,
   DmxTriggerBackend, SimulatedEnttecDevice, OscTriggerBackend, SimulatedDatagram,
   sampleLensAxis, LENS_KINDS,
+  buildLensProgram, lensProgramSize, lensFeasibility, LENS_AXIS_INDEX,
   NO_LIMITS, isTaught, jogWouldExceed, violationsForFilm, describeViolations,
 } from "@graffik-ng/nmx-protocol";
 
@@ -49,6 +50,17 @@ const DEFAULT_PREFS = {
     maxSpeedPct: 100, // scales the jog-speed field at full deflection
   },
   recent: [],
+  /* Lens motors are rig configuration, not part of a move (ADR-0018).
+     `steps` is remembered between sessions as a HINT for the feasibility
+     pre-flight — it is never treated as homing, because only the board knows
+     whether it has seen a mechanical stop since it powered up. */
+  lens: {
+    motors: {
+      focus: { steps: 0, maxStepsPerSec: 3000, invert: false },
+      iris:  { steps: 0, maxStepsPerSec: 2000, invert: false },
+      zoom:  { steps: 0, maxStepsPerSec: 2000, invert: false },
+    },
+  },
   /* Logical target -> physical output (ADR-0016). Bindings are rig config, so
      they live here rather than in the move file — a .graffik must survive being
      carried to another rig. */
@@ -101,6 +113,12 @@ function loadPrefs() {
         ...DEFAULT_PREFS.triggers, ...(raw.triggers ?? {}),
         bindings: Array.isArray(raw.triggers?.bindings) ? raw.triggers.bindings : [...DEFAULT_PREFS.triggers.bindings],
         osc: { ...DEFAULT_PREFS.triggers.osc, ...(raw.triggers?.osc ?? {}) },
+      },
+      lens: {
+        ...DEFAULT_PREFS.lens, ...(raw.lens ?? {}),
+        motors: Object.fromEntries(LENS_KINDS.map((k) => [
+          k, { ...DEFAULT_PREFS.lens.motors[k], ...(raw.lens?.motors?.[k] ?? {}) },
+        ])),
       },
       export: {
         ...DEFAULT_PREFS.export, ...(raw.export ?? {}),
@@ -620,16 +638,129 @@ ipcMain.handle("nmx:set-bindings", (_e, bindings) => {
   return prefs.triggers.bindings;
 });
 
+/* ------------------------------------------------------------------
+   Lens motors (ADR-0018) — the same board as the cues, protocol v2
+   ------------------------------------------------------------------ */
+
+/** The lens device IS the trigger board; there is no second connection. */
+const lensBackend = () => {
+  const be = backends.get("serial");
+  return be && be.supportsLens?.() ? be : null;
+};
+
+/** Push the stored motor configuration at the board. Cheap and idempotent. */
+async function declareLensMotors(be, kinds = LENS_KINDS) {
+  for (const kind of kinds) {
+    const m = prefs.lens.motors[kind];
+    await be.declareLensAxis({ kind, steps: m.steps, maxStepsPerSec: m.maxStepsPerSec, invert: m.invert });
+  }
+}
+
+ipcMain.handle("nmx:lens-status", () => {
+  const be = lensBackend();
+  return {
+    connected: !!be,
+    /* A connected v1 cue board is a real, useful device that simply has no lens
+       hardware. Saying "not connected" would send the operator looking for a
+       cable; saying so explicitly sends them looking for the right board. */
+    reason: be ? null : backends.get("serial") ? "the connected board speaks protocol v1 — cues only, no lens axes" : null,
+    axes: be ? be.lensAxes() : 0,
+    describe: be ? be.describe() : null,
+    motors: structuredClone(prefs.lens.motors),
+  };
+});
+
+ipcMain.handle("nmx:lens-set-motor", async (_e, kind, patch) => {
+  if (!LENS_KINDS.includes(kind)) throw new Error(`unknown lens axis "${kind}"`);
+  Object.assign(prefs.lens.motors[kind], patch);
+  savePrefs();
+  const be = lensBackend();
+  if (be) await declareLensMotors(be, [kind]);
+  return structuredClone(prefs.lens.motors[kind]);
+});
+
+/**
+ * Drive a barrel into both stops and record the travel between them.
+ *
+ * Given a long timeout on purpose — a slow barrel takes many seconds, and the
+ * 1.5 s request timeout that suits every other command would abandon a
+ * calibration that was working perfectly.
+ */
+ipcMain.handle("nmx:lens-calibrate", async (_e, kind) => {
+  const be = lensBackend();
+  if (!be) throw new Error("no lens device connected");
+  await declareLensMotors(be, [kind]);
+  const steps = await be.calibrateLens(kind, 90_000);
+  prefs.lens.motors[kind].steps = steps;
+  savePrefs();
+  return { kind, steps };
+});
+
+/** Jog a barrel by hand — for marking a lens against its witness marks. */
+ipcMain.handle("nmx:lens-seek", (_e, kind, position) => {
+  const be = lensBackend();
+  if (!be) throw new Error("no lens device connected");
+  be.seekLens(kind, position);
+  return true;
+});
+
+/**
+ * Pre-flight the lens program: is it too big, and can the motors follow it?
+ *
+ * Same idea as `cue-check`. The expensive moment to learn that a snap focus
+ * outruns the motor is the rushes; the cheap one is before the performer is in
+ * position.
+ */
+ipcMain.handle("nmx:lens-check", (_e, film) => {
+  const lanes = (film.lensAxes ?? []).map((a) => a.kind);
+  const be = lensBackend();
+  const motorSteps = Object.fromEntries(LENS_KINDS.map((k) => [k, prefs.lens.motors[k].steps]));
+  const program = buildLensProgram(film, { motorSteps });
+  const points = lensProgramSize(program);
+  return {
+    lanes,
+    connected: !!be,
+    points,
+    densePoints: (film.durationFrames + 1) * lanes.length,
+    /* An honest estimate: the line the host will actually send, at 115200 8N1. */
+    uploadSeconds: Number(((points * 22 * 10) / 115200).toFixed(2)),
+    toleranceUnits: program.toleranceUnits,
+    infeasible: lanes.length ? lensFeasibility(program, prefs.lens.motors) : [],
+  };
+});
+
+ipcMain.handle("nmx:lens-upload", async (_e, film) => {
+  const be = lensBackend();
+  if (!be) throw new Error("no lens device connected");
+  await declareLensMotors(be);
+  const motorSteps = Object.fromEntries(LENS_KINDS.map((k) => [k, prefs.lens.motors[k].steps]));
+  const program = buildLensProgram(film, { motorSteps });
+  const sent = await be.uploadLens(program);
+  return { points: sent, axes: program.axes.map((a) => ({ kind: a.kind, points: a.points.length })) };
+});
+
 /** Pre-flight: which cues cannot be delivered, checked before the pass runs. */
 ipcMain.handle("nmx:cue-check", (e, film) => {
   const s = ensureScheduler(BrowserWindow.fromWebContents(e.sender));
   s.load(buildCueList(film));
   const serial = backends.get("serial");
+  const lensLanes = (film.lensAxes ?? []).length;
+  const lensBe = lensBackend();
+  /* Lens infeasibility is reported alongside unroutable cues so ONE pre-flight
+     gate covers the whole pass. Two gates would mean two chances to skip one. */
+  let lensProblems = [];
+  if (lensLanes && lensBe) {
+    const motorSteps = Object.fromEntries(LENS_KINDS.map((k) => [k, prefs.lens.motors[k].steps]));
+    lensProblems = lensFeasibility(buildLensProgram(film, { motorSteps }), prefs.lens.motors);
+  }
   return {
     total: (film.events ?? []).length,
     unroutable: s.unroutable().map((u) => ({ id: u.cue.id, target: u.cue.target, reason: u.reason })),
     tier: serial ? serial.tier : 1,
     device: serial ? serial.describe() : null,
+    lensLanes,
+    lensDriven: !!lensBe,
+    lensProblems: lensProblems.map((p) => ({ kind: p.kind, reason: p.reason })),
   };
 });
 
@@ -645,14 +776,23 @@ ipcMain.handle("nmx:cues-arm", async (e, film) => {
   s.load(cues);
   const serial = backends.get("serial");
   if (serial && serial.tier === 2) {
+    /* The lens program must be on the board BEFORE ARM: ARM is what latches it,
+       and its reply carries the point count the backend cross-checks against
+       what it sent. Uploading after ARM would arm an empty curve. */
+    let lensPoints = 0;
+    if (serial.supportsLens?.() && (film.lensAxes ?? []).length) {
+      await declareLensMotors(serial);
+      const motorSteps = Object.fromEntries(LENS_KINDS.map((k) => [k, prefs.lens.motors[k].steps]));
+      lensPoints = await serial.uploadLens(buildLensProgram(film, { motorSteps }));
+    }
     const routed = cues
       .map((cue) => ({ cue, b: binding(cue.target) }))
       .filter((x) => x.b && x.b.backendId === "serial")
       .map((x) => ({ cue: x.cue, output: x.b.output }));
     const accepted = await serial.arm(routed);
-    return { tier: 2, armed: accepted, hostScheduled: cues.length - routed.length };
+    return { tier: 2, armed: accepted, hostScheduled: cues.length - routed.length, lensPoints };
   }
-  return { tier: 1, armed: cues.length, hostScheduled: cues.length };
+  return { tier: 1, armed: cues.length, hostScheduled: cues.length, lensPoints: 0 };
 });
 
 /** Called by the renderer the instant the move starts, so t=0 is the same t=0. */

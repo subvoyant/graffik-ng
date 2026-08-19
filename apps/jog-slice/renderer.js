@@ -105,6 +105,20 @@ if (!window.nmx) {
     gotoKfStart: async () => {},
     camArm: async () => {}, camFire: async () => {}, camDisable: async () => {},
     saveFilm: async () => null, loadFilm: async () => null, stopAll: async () => { speeds.fill(0); },
+    lensStatus: async () => ({
+      connected: false, reason: null, axes: 0, describe: null,
+      motors: { focus: { steps: 0, maxStepsPerSec: 3000, invert: false },
+                iris:  { steps: 0, maxStepsPerSec: 2000, invert: false },
+                zoom:  { steps: 0, maxStepsPerSec: 2000, invert: false } },
+    }),
+    lensSetMotor: async (_k, patch) => patch,
+    lensCalibrate: async () => { throw new Error("browser preview — no lens device"); },
+    lensSeek: async () => true,
+    lensCheck: async (f) => ({
+      lanes: (f.lensAxes ?? []).map((a) => a.kind), connected: false, points: 0,
+      densePoints: 0, uploadSeconds: 0, toleranceUnits: 32, infeasible: [],
+    }),
+    lensUpload: async () => ({ points: 0, axes: [] }),
     exportFormats: async () => [
       { id: "usda", label: "OpenUSD (.usda)", ext: "usda", note: "Cinema 4D, Blender, Houdini, Maya, Unreal. Carries its own units and up-axis." },
       { id: "abc", label: "Alembic + FBX (via Blender)", ext: "usda", note: "Writes the .usda plus a Blender script that converts it." },
@@ -670,10 +684,13 @@ function render() {
   };
   if (hasLens()) {
     band(tracksTop(), "MOTION — SLIDE · PAN · TILT");
+    /* Say what is actually true right now. Once a v2 board is connected the
+       lanes DO drive, and a permanent "authoring only" label would then be the
+       app lying in the other direction. */
     band(
       lensTop() - GROUP_HEAD,
       "LENS — " + lensAxesOf().map((a) => a.kind.toUpperCase()).join(" · ") +
-        "   (authoring + export only — no lens device yet)",
+        (lensDriven ? "   (driven on device)" : "   (authoring + export only — no lens device)"),
     );
   }
 
@@ -1063,7 +1080,9 @@ $("kfDelete").onclick = () => selection?.kind === "key" && delKey(selection.trac
 function formatLens(ax, position) {
   if (!ax.map) return `${Math.round(position * 100)}%`;
   const m = ax.map.marks;
-  const p = ax.invert ? 1 - position : position;
+  /* No flip. The lane IS barrel travel; which way the motor turns to get there
+     is rig configuration and lives in the motor settings (ADR-0018). */
+  const p = position;
   let v = m[m.length - 1].value;
   if (p <= m[0].position) v = m[0].value;
   else {
@@ -1103,8 +1122,12 @@ function addLensAxis(kind) {
   });
   film.lensAxes.sort((a, b) => LENS_AXES.findIndex((d) => d.kind === a.kind) - LENS_AXES.findIndex((d) => d.kind === b.kind));
   uploaded = false;
-  refreshLens(); syncInputs(); render();
-  status(`${kind} lane added — mark the lens in ⌾ Lens… to see real units.`);
+  refreshLens(); syncInputs(); refreshLensDriven();
+  status(
+    lensDriven
+      ? `${kind} lane added — set its motor and calibrate in ⌾ Lens….`
+      : `${kind} lane added — mark the lens in ⌾ Lens… to see real units. No lens device, so it will not be driven.`,
+  );
 }
 
 function removeLensAxis(kind) {
@@ -1113,6 +1136,14 @@ function removeLensAxis(kind) {
   if (!film.lensAxes.length) delete film.lensAxes;
   selection = null;
   refreshLens(); updateInspector(); syncInputs(); render();
+}
+
+/** Whether a connected board can actually drive these lanes. Display only. */
+let lensDriven = false;
+async function refreshLensDriven() {
+  try { lensDriven = Boolean((await window.nmx.lensStatus()).connected); }
+  catch { lensDriven = false; }
+  render();
 }
 
 let lensTimer = null;
@@ -1173,7 +1204,7 @@ function renderLensMarks() {
   if (!ax) return;
   $("lensMapKind").textContent = ax.kind;
   $("lensMapName").value = ax.map?.name ?? "";
-  $("lensInvert").checked = Boolean(ax.invert);
+  refreshLensMotor(ax.kind);
   const unit = ax.kind === "iris" ? "T" : ax.kind === "zoom" ? "mm" : "m";
   const marks = ax.map?.marks ?? [];
   $("lensMarkRows").innerHTML = marks.length
@@ -1210,6 +1241,68 @@ $("lensAddMark").onclick = () => {
 };
 
 $("lensMapName").onchange = () => { const ax = selectedLens() ?? lensAxesOf()[0]; if (ax?.map) { ax.map.name = $("lensMapName").value.trim(); } };
+/* ---- motor settings: rig config, saved outside the move (ADR-0018) ---- */
+
+let lensDev = null;
+async function refreshLensMotor(kind) {
+  try { lensDev = await window.nmx.lensStatus(); }
+  catch { lensDev = null; }
+  const m = lensDev?.motors?.[kind] ?? { steps: 0, maxStepsPerSec: 3000, invert: false };
+  const live = Boolean(lensDev?.connected);
+  /* Short form on purpose: the full describe() string wrapped the Calibrate
+     button onto its own line, where it read as unrelated to the device. */
+  $("lensDevChip").textContent = live
+    ? `${lensDev.describe.split(" ")[0]} · ${lensDev.axes} lens axes`
+    : lensDev?.reason ?? "no lens device";
+  $("lensDevChip").classList.toggle("dim", !live);
+  /* Travel is shown as remembered-vs-measured, because they are not the same
+     claim: only the board knows whether it has seen a stop since power-up. */
+  $("lensTravel").textContent = m.steps ? `travel ${m.steps} steps (remembered)` : "travel — not calibrated";
+  $("lensMaxSps").value = String(m.maxStepsPerSec);
+  $("lensInvert").checked = Boolean(m.invert);
+  $("lensCalibrate").disabled = !live;
+  $("lensJog").disabled = !live || !m.steps;
+  $("lensJogRead").textContent = live && m.steps ? "drag to drive the barrel" : "jog needs a calibrated device";
+}
+
+const motorKind = () => selectedLens()?.kind ?? "focus";
+
+$("lensMaxSps").onchange = async () => {
+  const v = Math.max(100, Math.round(Number($("lensMaxSps").value) || 3000));
+  try { await window.nmx.lensSetMotor(motorKind(), { maxStepsPerSec: v }); }
+  catch (e) { status("Motor setting failed: " + e.message); }
+  refreshLensMotor(motorKind());
+};
+
+$("lensCalibrate").onclick = async () => {
+  const kind = motorKind();
+  $("lensCalibrate").disabled = true;
+  $("lensTravel").textContent = "calibrating — driving to both stops…";
+  try {
+    const r = await window.nmx.lensCalibrate(kind);
+    status(`${kind} calibrated: ${r.steps} steps of barrel travel.`);
+    logPass(`${kind} calibrated — ${r.steps} steps`);
+  } catch (e) {
+    status(`${kind} calibration failed: ${e.message}`);
+  }
+  refreshLensMotor(kind);
+};
+
+/* Jogging a barrel by hand is how a lens gets marked: drive to a witness mark,
+   read the travel, write it down. Fire-and-forget so a dragged slider stays
+   responsive — the device clamps at its own stops regardless. */
+$("lensJog").oninput = () => {
+  const ax = selectedLens();
+  const kind = ax?.kind ?? "focus";
+  const pos = Number($("lensJog").value) / 100;
+  window.nmx.lensSeek(kind, pos).catch(() => {});
+  $("lensNewPos").value = String(Math.round(pos * 100));
+  /* Show BOTH: the travel the mark will record, and what the existing map
+     thinks it reads there — which is how you notice a map that has drifted. */
+  $("lensJogRead").textContent =
+    `${Math.round(pos * 100)}% travel` + (ax?.map ? ` \u00b7 map says ${formatLens(ax, pos)}` : "");
+};
+
 $("lensInvert").onchange = () => {
   const ax = selectedLens() ?? lensAxesOf()[0]; if (!ax) return;
   snapshot(); ax.invert = $("lensInvert").checked; refreshLens(); updateInspector(); render();
@@ -1233,23 +1326,40 @@ $("lensAdd").onchange = () => {
  * that cannot be delivered is found BEFORE the performer is in position, not
  * discovered afterwards from a log.
  */
+/**
+ * One gate for the whole pass: cues AND lens. Two gates would be two chances to
+ * skip one, and both failures cost the same thing — a take.
+ */
 async function armCuesForPass() {
-  const n = (film.events ?? []).length;
-  if (!n) return true;
+  const cues = (film.events ?? []).length;
+  const lanes = lensAxesOf().length;
+  if (!cues && !lanes) return true;
   try {
     const check = await window.nmx.cueCheck(film);
-    if (check.unroutable.length) {
+    if (check.unroutable?.length) {
       const first = check.unroutable[0];
       status(`Cue “${first.id}” cannot fire — ${first.reason}. ${check.unroutable.length} of ${check.total} unroutable; open ⚡ Cues…`);
       return false;
     }
+    if (check.lensProblems?.length) {
+      const first = check.lensProblems[0];
+      status(`Lens: ${first.reason}. Open ⌾ Lens… — ${check.lensProblems.length} lane(s) cannot run.`);
+      return false;
+    }
     const armed = await window.nmx.cuesArm(film);
-    logPass(armed.tier === 2
-      ? `${armed.armed} cues armed on device (tier 2)`
-      : `${armed.armed} cues host-scheduled (tier 1 — ±20 ms, not repeatable)`);
+    if (cues) {
+      logPass(armed.tier === 2
+        ? `${armed.armed} cues armed on device (tier 2)`
+        : `${armed.armed} cues host-scheduled (tier 1 — ±20 ms, not repeatable)`);
+    }
+    if (lanes) {
+      logPass(armed.lensPoints
+        ? `${lanes} lens lane(s) armed on device — ${armed.lensPoints} points (tier 2)`
+        : `${lanes} lens lane(s) NOT driven — no lens device; pull by hand`);
+    }
     return true;
   } catch (e) {
-    status("Cue arm failed: " + e.message);
+    status("Arm failed: " + e.message);
     return false;
   }
 }
@@ -1416,7 +1526,11 @@ $("cueConnect").onclick = async () => {
   try {
     const info = await window.nmx.triggerConnect($("cuePort").value);
     setTier(info.tier, `${info.name} — ${info.outputs} out / ${info.inputs} in, protocol v${info.protocol}`);
-    status(`Trigger device connected: ${info.name} (tier ${info.tier}).`);
+    await refreshLensDriven();
+    status(
+      `Trigger device connected: ${info.name} (tier ${info.tier})` +
+        (info.lensAxes ? `, ${info.lensAxes} lens axes.` : ". No lens axes — cues only."),
+    );
   } catch (e) { status("Trigger connect failed: " + e.message); }
 };
 $("dmxConnect").onclick = async () => {
@@ -1453,7 +1567,8 @@ $("oscDisconnect").onclick = async () => {
 $("cueDisconnect").onclick = async () => {
   await window.nmx.triggerDisconnect();
   setTier(1, null);
-  status("Trigger device disconnected — cues fall back to host scheduling.");
+  await refreshLensDriven();
+  status("Trigger device disconnected — cues fall back to host scheduling, lens lanes stop being driven.");
 };
 
 /* ---------------- capture ---------------- */
@@ -1713,14 +1828,21 @@ $("tlUpload").onclick = async () => {
   try {
     const n = await window.nmx.uploadKf(film);
     uploaded = true;
-    /* Say the quiet part. The NMX has no lens channel and no FIZ device exists
-       yet (ADR-0017 §4), so a focus pull on the timeline goes nowhere on this
-       pass. An operator who assumed otherwise finds out on the rushes. */
-    const lens = lensAxesOf().map((a) => a.kind).join(" · ");
-    status(
-      `Uploaded to controller (${n} packets). Ready to run.` +
-        (lens ? `  \u2014 ${lens} NOT sent: no lens device. Pull by hand or match in post.` : ""),
-    );
+    /* The NMX has no lens channel — lens lanes go to the trigger board instead,
+       and only at arm time. Say which of the two happened, because an operator
+       who assumes a focus pull was sent finds out in the rushes. */
+    const kinds = lensAxesOf().map((a) => a.kind);
+    let lensNote = "";
+    if (kinds.length) {
+      try {
+        const c = await window.nmx.lensCheck(film);
+        lensNote = c.connected
+          ? `  \u2014 ${kinds.join(" \u00b7 ")}: ${c.points} points ready (from ${c.densePoints}), ~${c.uploadSeconds}s at arm.`
+          : `  \u2014 ${kinds.join(" \u00b7 ")} NOT sent: no lens device. Pull by hand or match in post.`;
+        if (c.infeasible.length) lensNote += `  \u26a0 ${c.infeasible[0].reason}`;
+      } catch { lensNote = `  \u2014 ${kinds.join(" \u00b7 ")}: lens state unknown.`; }
+    }
+    status(`Uploaded to controller (${n} packets). Ready to run.` + lensNote);
   } catch (e) { status("Upload blocked: " + e.message); }
 };
 $("tlGotoStart").onclick = async () => {
@@ -1917,6 +2039,7 @@ function buildTimebasePicker() {
   } catch { /* preview / first run */ }
   renderLimits();
   syncPadInputs();
+  await refreshLensDriven();
   adopt(film);
   new ResizeObserver(render).observe(cv);
   if (window.nmx.__preview) status("Browser preview — no hardware, no Electron. Controls are stubbed.");

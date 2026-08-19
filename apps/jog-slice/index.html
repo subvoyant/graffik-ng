@@ -183,6 +183,7 @@ input[type=text] { font-size: 11.5px; }
   font-size: 9.5px; font-weight: 600; letter-spacing: .11em; text-transform: uppercase;
   color: var(--ink-faint); border-bottom: 1px solid var(--line); padding-bottom: 4px; margin-top: 4px;
 }
+#lensMarkRows { max-height: 190px; overflow-y: auto; }
 .bind { display: grid; grid-template-columns: 1fr 92px 58px 26px 26px; gap: 5px; align-items: center; margin: 3px 0; }
 .bind input, .bind select { font-size: 10.5px; padding: 3px 5px; }
 .chip.tier2 { color: var(--ok); border-color: #2c4a3e; }
@@ -537,10 +538,35 @@ input[type=text] { font-size: 11.5px; }
         <span class="field"><label>Label</label><input id="lensNewLabel" type="text" placeholder="6'6&quot;" spellcheck="false" style="width:92px" /></span>
         <button id="lensAddMark">Add</button>
       </div>
+      <!-- The jog sits WITH the marking controls because that is the workflow:
+           drive the barrel to a witness mark, read what the barrel says, type
+           it in. It fills "At" as it moves, so the two are visibly connected. -->
+      <div class="row">
+        <span class="field" style="flex:1;min-width:0"><label>Jog</label>
+          <input id="lensJog" type="range" min="0" max="100" step="1" value="50" style="flex:1;min-width:0" disabled />
+        </span>
+        <span id="lensJogRead" style="font-size:10.5px;color:var(--ink-faint);font-family:var(--mono)">—</span>
+      </div>
+      <header class="subhead">Motor — rig settings, saved outside the move</header>
+      <div class="row">
+        <span id="lensDevChip" class="chip dim">no lens device</span>
+        <button id="lensCalibrate" disabled title="Drive the barrel into both stops and measure its travel">Calibrate…</button>
+        <span class="grow"></span>
+        <span id="lensTravel" style="font-size:10.5px;color:var(--ink-faint)">travel —</span>
+      </div>
+      <div class="row">
+        <span class="field"><label>Top speed</label><input id="lensMaxSps" class="num" type="number" min="100" max="20000" step="100" value="3000" data-unit="steps/s" /></span>
+        <span class="grow"></span>
+        <label class="chk"><input type="checkbox" id="lensInvert" /> motor runs backwards</label>
+      </div>
+      <div style="font-size:10.5px;color:var(--ink-faint)">
+        A stepper is open loop, so <b>Calibrate</b> is what makes a position mean anything: it drives
+        the barrel into both stops and measures the travel between them. The board refuses to run a
+        pull on an axis it has not calibrated since it powered up.
+      </div>
       <div class="row">
         <button id="lensRemoveAxis" title="Remove this lane from the move">Remove lane</button>
         <span class="grow"></span>
-        <label class="chk"><input type="checkbox" id="lensInvert" /> motor runs backwards</label>
       </div>
     </div>
   </div>
