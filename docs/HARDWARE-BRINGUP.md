@@ -76,6 +76,20 @@ Do this with **one axis at a time** and a hand near STOP ALL.
 
 Only after step 6 and 7 pass should anything run unattended.
 
+### Check the device's feasibility answers against reality (ADR-0031)
+
+The app now asks the controller whether each move is achievable before running
+it. Nobody has ever seen those answers from a real NMX. Two moves, five minutes:
+
+1. **A comfortable move** — the controller should say nothing, and the pass
+   should run. If it refuses a move that then runs perfectly when forced, the
+   gate is an obstacle and operators will route around it. Say so in the log.
+2. **A deliberately over-fast move** — a long span in a very short time. The
+   controller should refuse it by name and axis. Then run it anyway (clear the
+   move and re-upload a version it accepts if the gate blocks you) and watch
+   what "failing to track" actually looks like on this rig, because that is the
+   symptom you will otherwise misdiagnose as a belt.
+
 ## Phase 3 — 2-point repeatability (~20 min)
 
 The classic engine, simplest possible move.

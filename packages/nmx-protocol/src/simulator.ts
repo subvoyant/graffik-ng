@@ -45,10 +45,19 @@ export class SimulatedNmx implements PortLike {
   positions = [0, 0, 0];
   startPoints = [0, 0, 0];
   stopPoints = [0, 0, 0];
+  travelMs = [0, 0, 0];
   enabled = [false, false, false];
   jogSpeeds = [0, 0, 0];
 
   kfAxes: SimAxisKf[] = [0, 1, 2].map(() => ({ count: 0, xn: [], fn: [], dn: [] }));
+  /**
+   * What this simulated rig can actually do, so feasibility questions get a real
+   * answer rather than a cheerful one (ADR-0031). A simulator that always says
+   * "yes, that move is possible" is the permissive-simulator trap: every test
+   * passes and the rig cannot track the move.
+   */
+  maxStepsPerSec = 4000;
+  maxStepsPerSec2 = 20000;
   kfCurrentAxis = 0;
   kfVideoTimeMs = 0;
   kfRunState: 0 | 1 | 2 = 0;
@@ -194,6 +203,9 @@ export class SimulatedNmx implements PortLike {
          point of reading it back is to catch a pass running under a plan type
          somebody else set (PLAN_TYPE — the denominator of percent depends on it). */
       case 118: return this.typedByte(this.programMode);
+      /* Every motor can reach the 2-point speed only if none of the taught
+         spans needs more than this rig has. */
+      case 129: return this.typedByte(this.twoPointValid() ? 1 : 0);
       /* One-shot, exactly like the firmware: whoever asks first consumes it.
          A simulator that answered true every time would make the app look like
          it worked and hide the subtlety the ADR is about. */
@@ -226,6 +238,10 @@ export class SimulatedNmx implements PortLike {
       }
       case 16: this.startPoints[idx] = this.u32(p.payload); return this.ack();
       case 17: this.stopPoints[idx] = this.u32(p.payload); return this.ack();
+      case 20: this.travelMs[idx] = this.u32(p.payload); return this.ack();
+      /* Same question as `msAutoSet(motor, validateOnly)`, and like it this
+         asking never changes anything. */
+      case 120: return this.typedByte(this.motorTwoPointValid(idx) ? 1 : 0);
       case 23: this.positions[idx] = this.startPoints[idx]; return this.ack();
       case 106: return this.typedLong(this.positions[idx]);
       case 107: return this.typedByte(this.jogSpeeds[idx] !== 0 ? 1 : 0);
@@ -247,6 +263,59 @@ export class SimulatedNmx implements PortLike {
     }
   }
 
+  /** Steps the 2-point program asks of this motor, per second. */
+  private motorTwoPointValid(idx: number): boolean {
+    const t = this.travelMs[idx];
+    if (t <= 0) return true;   // nothing programmed asks nothing
+    const need = (Math.abs(this.stopPoints[idx] - this.startPoints[idx]) * 1000) / t;
+    return need <= this.maxStepsPerSec;
+  }
+
+  private twoPointValid(): boolean {
+    return [0, 1, 2].every((i) => !this.enabled[i] || this.motorTwoPointValid(i));
+  }
+
+  /**
+   * Peak speed of the uploaded spline, not of its knots.
+   *
+   * The first version of this checked `max|dn|` and happily passed a move that
+   * goes 5000 steps in one second on a 1000 steps/s rig — because a two-point
+   * move has **zero velocity at both keys** and all the speed in between. Knot
+   * velocities are not the answer to "how fast does this go"; the curve is.
+   * Sampled rather than solved analytically: 32 points per segment is far finer
+   * than the firmware's own update rate, and the arithmetic stays obvious.
+   */
+  private kfPeakSpeed(axis: SimAxisKf): number {
+    let peak = 0;
+    for (let i = 1; i < axis.xn.length; i++) {
+      const h = (axis.xn[i] - axis.xn[i - 1]) / 1000;   // ms → s
+      if (h <= 0) continue;
+      const p0 = axis.fn[i - 1], p1 = axis.fn[i];
+      const m0 = (axis.dn[i - 1] ?? 0) * h, m1 = (axis.dn[i] ?? 0) * h;
+      for (let k = 0; k <= 32; k++) {
+        const t = k / 32;
+        /* d/dt of the cubic Hermite basis, divided by h to get steps/second. */
+        const d = (6 * t * t - 6 * t) * p0 + (3 * t * t - 4 * t + 1) * m0
+                + (-6 * t * t + 6 * t) * p1 + (3 * t * t - 2 * t) * m1;
+        peak = Math.max(peak, Math.abs(d / h));
+      }
+    }
+    return peak;
+  }
+
+  private kfVelocityValid(axis: SimAxisKf): boolean {
+    return this.kfPeakSpeed(axis) <= this.maxStepsPerSec;
+  }
+
+  private kfAccelValid(axis: SimAxisKf): boolean {
+    for (let i = 1; i < axis.dn.length; i++) {
+      const dt = (axis.xn[i] - axis.xn[i - 1]) / 1000;
+      if (dt <= 0) continue;
+      if (Math.abs((axis.dn[i] - axis.dn[i - 1]) / dt) > this.maxStepsPerSec2) return false;
+    }
+    return true;
+  }
+
   private handleKeyFrame(p: Packet): Uint8Array | null {
     const axis = this.kfAxes[this.kfCurrentAxis];
     switch (p.command) {
@@ -266,7 +335,15 @@ export class SimulatedNmx implements PortLike {
       case 22: this.kfRunState = 0; return this.ack();
       case 23: return this.ack(); // take up backlash
       case 100: return this.typedLong(axis.xn.length);
+      /* Modelled, not stubbed: valid iff the uploaded spline stays inside what
+         this rig can deliver — the same question `validateVel()` answers. */
+      case 105: return this.typedByte(this.kfVelocityValid(axis) ? 1 : 0);
+      case 106: return this.typedByte(this.kfAccelValid(axis) ? 1 : 0);
       case 120: return this.typedByte(this.kfRunState);
+      /* 121 was missing until v0.25 and fell through to a bare ack, so a caller
+         got something that was not a run time — the flight recorder's device
+         timing read as "incomplete" against the simulator and nothing said why. */
+      case 121: return this.typedLong(Math.round((this.kfProgressPercent / 100) * this.kfVideoTimeMs));
       case 122: return this.typedLong(this.kfVideoTimeMs);
       case 123: {
         if (this.kfRunState === 1) {

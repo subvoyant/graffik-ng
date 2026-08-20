@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { computeVelocities, splineAt } from "../src/spline.js";
-import { buildKeyFrameMove, runSequence } from "../src/move.js";
+import { buildKeyFrameMove, runSequence, describeMoveFeasibility, moveIsFeasible } from "../src/move.js";
 import { SimulatedNmx } from "../src/simulator.js";
 import { NmxClient, handshake } from "../src/client.js";
 import { broadcast, general, keyFrame, motors, PLAN_TYPE } from "../src/commands.js";
@@ -245,5 +245,86 @@ describe("the power-cycle flag is a one-shot latch (ADR-0030)", () => {
     expect((await client.query(general.queryRestoresPosition())).value).toBe(0);
     await client.send(general.setRestorePosition(true));
     expect((await client.query(general.queryRestoresPosition())).value).toBe(1);
+  });
+});
+
+describe("the solver refuses points it cannot use (v0.25)", () => {
+  it("rejects a key frame with no usable time instead of emitting NaN", () => {
+    /* `undefined <= undefined` is false, so the strictly-increasing check used
+       to pass and every abscissa reached the wire as NaN. */
+    expect(() => computeVelocities([{ position: 0 } as never, { position: 100 } as never]))
+      .toThrow(/no usable time/);
+  });
+
+  it("rejects a non-finite position and a non-finite caller velocity", () => {
+    expect(() => computeVelocities([{ time: 0, position: NaN }, { time: 1, position: 1 }]))
+      .toThrow(/no usable position/);
+    expect(() => computeVelocities([{ time: 0, position: 0, velocity: Infinity }, { time: 1, position: 1 }]))
+      .toThrow(/non-finite velocity/);
+  });
+});
+
+describe("asking the device whether the move is possible (ADR-0031)", () => {
+  const row = (o: Partial<{ axis: number; name: string; velocityOk: boolean | null; accelOk: boolean | null }> = {}) =>
+    ({ axis: 0, name: "Slide", velocityOk: true, accelOk: true, ...o });
+
+  it("is silent about an axis the device is happy with", () => {
+    expect(describeMoveFeasibility([row(), row({ axis: 1, name: "Pan" })])).toEqual([]);
+    expect(moveIsFeasible([row()])).toBe(true);
+  });
+
+  it("names the axis and which limit it broke", () => {
+    expect(describeMoveFeasibility([row({ velocityOk: false })])[0]).toMatch(/Slide.*top speed/);
+    expect(describeMoveFeasibility([row({ accelOk: false })])[0]).toMatch(/Slide.*accelerates harder/);
+    expect(describeMoveFeasibility([row({ velocityOk: false, accelOk: false })])[0]).toMatch(/both/);
+    expect(moveIsFeasible([row({ velocityOk: false })])).toBe(false);
+  });
+
+  it("distinguishes NOT ASKED from told-no", () => {
+    const lines = describeMoveFeasibility([row({ velocityOk: null, accelOk: null })]);
+    expect(lines[0]).toMatch(/did not answer/);
+    /* Not being able to ask is not a refusal — it must not block the pass. */
+    expect(moveIsFeasible([row({ velocityOk: null, accelOk: null })])).toBe(true);
+  });
+
+  it("the simulator answers the key-frame validity questions for real, not with a cheerful yes", async () => {
+    const sim = new SimulatedNmx();
+    sim.maxStepsPerSec = 1000;
+    const client = new NmxClient(sim);
+    await handshake(client);
+    const packets = buildKeyFrameMove(
+      [{ axis: 0, points: [{ time: 0, position: 0 }, { time: 1000, position: 5000 }] }],
+      { videoTimeMs: 1000 },
+    );
+    for (const p of packets) await client.send(p);
+    await client.send(keyFrame.setAxis(0));
+    /* 5000 steps in a second on a 1000 steps/s rig: the device should say no. */
+    expect((await client.query(keyFrame.queryVelocityValid())).value).toBe(0);
+    sim.maxStepsPerSec = 20000;
+    expect((await client.query(keyFrame.queryVelocityValid())).value).toBe(1);
+  });
+
+  it("the simulator answers the 2-point question from the taught span and the travel time", async () => {
+    const sim = new SimulatedNmx();
+    sim.maxStepsPerSec = 1000;
+    const client = new NmxClient(sim);
+    await handshake(client);
+    await client.send(motors.setEnable(1, true));
+    await client.send(motors.setProgramStartPoint(1, 0));
+    await client.send(motors.setProgramStopPoint(1, 9000));
+    await client.send(motors.setTravel(1, 1000));           // 9000 steps in 1 s
+    expect((await client.query(motors.queryTwoPointVelocityValid(1))).value).toBe(0);
+    expect((await client.query(general.queryProgramValid())).value).toBe(0);
+    await client.send(motors.setTravel(1, 60000));          // same span over a minute
+    expect((await client.query(motors.queryTwoPointVelocityValid(1))).value).toBe(1);
+    expect((await client.query(general.queryProgramValid())).value).toBe(1);
+  });
+
+  it("key-frame query 121 returns a run time, not a bare ack", async () => {
+    const sim = new SimulatedNmx();
+    const client = new NmxClient(sim);
+    await handshake(client);
+    await client.send(keyFrame.setContinuousVideoTime(10000));
+    expect((await client.query(keyFrame.queryRunTime())).value).toBe(0);
   });
 });

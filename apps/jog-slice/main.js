@@ -26,6 +26,7 @@ import {
   fitCalibration, diagnoseCalibration, repeatability,
   probeNmx, judgePorts, noUsablePortAdvice,
   capUntaughtJog, bringUpReport, PLAN_TYPE, limitTrust,
+  describeMoveFeasibility, moveIsFeasible,
   newTrace, addSample, traceCoverage, compareTraces, deviationFromPlan, traceToCsv, timingCheck,
   NO_LIMITS, isTaught, jogWouldExceed, violationsForFilm, describeViolations,
 } from "@graffik-ng/nmx-protocol";
@@ -1383,8 +1384,49 @@ ipcMain.handle("nmx:lens-upload", async (_e, film) => {
   return { points: sent, axes: program.axes.map((a) => ({ kind: a.kind, points: a.points.length })) };
 });
 
+/**
+ * Ask the CONTROLLER whether the uploaded move is inside what its motors can do
+ * (ADR-0031). Selecting an axis is a pure pointer move in the firmware, so this
+ * is safe to run after an upload — it cannot disturb the program it is checking.
+ */
+async function moveFeasibility(film) {
+  const c = requireClient();
+  const rows = [];
+  for (const ax of film.axes ?? []) {
+    const row = { axis: ax.axis, name: AXIS_NAMES[ax.axis] ?? `Axis ${ax.axis}`, velocityOk: null, accelOk: null };
+    try {
+      await c.send(keyFrame.setAxis(ax.axis));
+      row.velocityOk = Boolean((await c.query(keyFrame.queryVelocityValid())).value);
+      row.accelOk = Boolean((await c.query(keyFrame.queryAccelValid())).value);
+    } catch { /* leave nulls — describeMoveFeasibility calls that unchecked */ }
+    rows.push(row);
+  }
+  return rows;
+}
+
+/** The same question for the classic engine, where the device answers per motor. */
+async function classicFeasibility() {
+  const c = requireClient();
+  const rows = [];
+  for (const m of [1, 2, 3]) {
+    const row = { axis: m - 1, name: AXIS_NAMES[m - 1], velocityOk: null, accelOk: null };
+    try { row.velocityOk = Boolean((await c.query(motors.queryTwoPointVelocityValid(m))).value); }
+    catch { /* stays null */ }
+    rows.push(row);
+  }
+  return rows;
+}
+
+ipcMain.handle("nmx:classic-check", async () => {
+  const c = requireClient();
+  const rows = await classicFeasibility();
+  let all = null;
+  try { all = Boolean((await c.query(general.queryProgramValid())).value); } catch { /* stays null */ }
+  return { rows, all, problems: describeMoveFeasibility(rows), ok: moveIsFeasible(rows) && all !== false };
+});
+
 /** Pre-flight: which cues cannot be delivered, checked before the pass runs. */
-ipcMain.handle("nmx:cue-check", (e, film) => {
+ipcMain.handle("nmx:cue-check", async (e, film) => {
   const s = ensureScheduler(BrowserWindow.fromWebContents(e.sender));
   s.load(buildCueList(film));
   const serial = backends.get("serial");
@@ -1398,6 +1440,10 @@ ipcMain.handle("nmx:cue-check", (e, film) => {
     lensProblems = lensFeasibility(buildLensProgram(film, { motorSteps }), prefs.lens.motors);
   }
   return {
+    /* One gate covers cues, lens speeds AND whether the rig can physically do
+       the move (ADR-0018's stated reason: two gates mean two chances to skip
+       one). Async now, because the last of those has to ask the controller. */
+    moveProblems: describeMoveFeasibility(await moveFeasibility(film)),
     total: (film.events ?? []).length,
     unroutable: s.unroutable().map((u) => ({ id: u.cue.id, target: u.cue.target, reason: u.reason })),
     tier: serial ? serial.tier : 1,

@@ -1,6 +1,6 @@
 # Digest: apps/jog-slice (Electron app)
 
-**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.24) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
+**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.25) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
 
 ## Shape
 
@@ -147,6 +147,12 @@ Layout is a fixed frame — appbar / rail(244px) / stage / statusbar — with **
 - **How to re-verify** (needs Playwright, which the repo does not depend on — this runs outside it): load `index.html` headless, `startPassSweep(...)`, sample `playheadFrame` on every `requestAnimationFrame`, and drive `anchorPassSweep()` every 500 ms with values that **deliberately disagree** with the extrapolation by ±1%. Then check the per-frame velocity for *backwards steps* and *spikes over 3× median*. Disagreeing readings are the case that snaps; agreeing ones prove nothing.
 - Measured: 60 fps, `render()` ≈ 0.74 ms on a six-lane 30 s move, 0 backwards steps, 0 velocity spikes over 3× median. Redrawing less often would have been the obvious wrong fix.
 - `followPlayhead()` pans the view when the sweep leaves the visible range.
+
+### One pre-flight per pass (v0.25 — ADR-0031)
+
+- `preflightPass(engine)` is the single call both run handlers make. It asks the **device** whether the move is achievable first (`nmx:cue-check`'s `moveProblems` for key-frame, `nmx:classic-check` for 2-point), then arms cues and lens lanes.
+- It had to sit **outside** `armCuesForPass`, whose `if (!cues && !lanes) return true` skips everything when nothing is attached — and a plain three-axis move with no cues is exactly where "can the rig do this" still matters.
+- A query that cannot be answered is logged and **does not block**. Refusing on a timeout is how a safety check gets routed around.
 
 ### Taught limits and a moving origin (v0.24 — ADR-0030)
 

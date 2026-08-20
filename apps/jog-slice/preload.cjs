@@ -123,6 +123,7 @@ contextBridge.exposeInMainWorld("nmx", {
   // the flight recorder (ADR-0027) — passSample replaces the progress poll,
   // because the pass is observed from one place or from two disagreeing ones
   // limit trust (ADR-0030)
+  classicCheck: () => ipcRenderer.invoke("nmx:classic-check"),
   limitStatus: () => ipcRenderer.invoke("nmx:limit-status"),
   trustLimits: () => ipcRenderer.invoke("nmx:trust-limits"),
   setRestorePosition: (on) => ipcRenderer.invoke("nmx:set-restore-position", on),

@@ -268,7 +268,8 @@ if (!window.nmx) {
     triggerDisconnect: async () => {},
     getBindings: async () => [{ target: "cue-light", backendId: "simulated", output: 1 }],
     setBindings: async (b) => b,
-    cueCheck: async (f) => ({ total: (f.events ?? []).length, unroutable: [], tier: 1, device: null }),
+    cueCheck: async (f) => ({ total: (f.events ?? []).length, unroutable: [], tier: 1, device: null, moveProblems: [] }),
+    classicCheck: async () => ({ rows: [], all: null, problems: [], ok: true }),
     cuesArm: async (f) => ({ tier: 1, armed: (f.events ?? []).length, hostScheduled: (f.events ?? []).length }),
     cuesStart: async () => ({ running: true }),
     cuesStop: async () => ({ fired: 0, worstJitterMs: 0, dispatched: [] }),
@@ -2200,6 +2201,34 @@ $("lensAdd").onchange = () => {
  * One gate for the whole pass: cues AND lens. Two gates would be two chances to
  * skip one, and both failures cost the same thing — a take.
  */
+/**
+ * ONE pre-flight before any pass (ADR-0018's rule, extended in ADR-0031).
+ *
+ * Two questions, in the order that matters: can the RIG do this move at all,
+ * and can everything attached to the pass be delivered. The first has to run
+ * even on a plain three-axis move with no cues and no lens lanes — which is why
+ * it sits here rather than inside the cue check, whose early return skips
+ * everything when there is nothing attached.
+ */
+async function preflightPass(engine) {
+  try {
+    const feas = engine === "classic"
+      ? await window.nmx.classicCheck()
+      : { problems: (await window.nmx.cueCheck(film)).moveProblems ?? [] };
+    if (feas.problems?.length) {
+      status(feas.problems[0] + (feas.problems.length > 1 ? `  (+${feas.problems.length - 1} more)` : ""));
+      for (const line of feas.problems) logPass(line);
+      return false;
+    }
+  } catch (e) {
+    /* Not being able to ASK is not the same as being told no. Say so and let
+       the operator decide — refusing here would block every pass the moment a
+       query times out. */
+    logPass("could not ask the controller whether this move is achievable: " + e.message);
+  }
+  return armCuesForPass();
+}
+
 async function armCuesForPass() {
   const cues = (film.events ?? []).length;
   const lanes = lensAxesOf().length;
@@ -2846,7 +2875,7 @@ $("tlGotoStart").onclick = async () => {
 $("tlRun").onclick = async () => {
   try {
     if (!uploaded) return status("Upload first (↑) — edits since last upload aren’t on the controller.");
-    if (!(await armCuesForPass())) return;
+    if (!(await preflightPass("keyframe"))) return;
     kfPassCount++; $("tlPassCounter").textContent = "pass " + kfPassCount;
     await countdown(Math.round((await window.nmx.cueMs(film)) / 1000));
     await window.nmx.kfRun();
@@ -2898,7 +2927,7 @@ $("arm").onclick = async () => {
 $("gotoStart").onclick = async () => { await window.nmx.gotoStart(); status("Sending axes to start marks…"); };
 $("run").onclick = async () => {
   try {
-    if (!(await armCuesForPass())) return;
+    if (!(await preflightPass("classic"))) return;
     passCount++; $("passCounter").textContent = "pass " + passCount;
     await countdown(Math.round((await window.nmx.cueMs(film)) / 1000));
     await window.nmx.run();

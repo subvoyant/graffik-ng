@@ -61,3 +61,52 @@ export function buildKeyFrameMove(axes: AxisMove[], options: KeyFrameMoveOptions
 export function runSequence(): Packet[] {
   return [keyFrame.takeUpBacklash(), keyFrame.run()];
 }
+
+/* ------------------------------------------------------------------ */
+/* Is this move physically possible? Ask the device (ADR-0031)          */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The controller validates an uploaded move against what its motors can
+ * actually deliver, and has done since the firmware we gate on: key-frame
+ * queries 105/106 run `validateVel()` / `validateAccel()` for the selected
+ * axis, and on the classic engine general 129 is `validateProgram()` with motor
+ * 120 naming the axis.
+ *
+ * We uploaded moves for twenty-four versions without ever asking. A move that
+ * demands more than a motor can deliver does not fail loudly — **it just fails
+ * to track**, which on a shoot reads as a belt problem, a payload problem, or a
+ * software bug, in that order, and costs the afternoon.
+ */
+export interface AxisFeasibility {
+  axis: number;
+  name: string;
+  /** `null` where the device was not asked or did not answer. */
+  velocityOk: boolean | null;
+  accelOk: boolean | null;
+}
+
+/**
+ * One line per axis that has something to say. Silent for axes the device is
+ * happy with — a pre-flight that prints three "fine" lines is a pre-flight
+ * people learn to scroll past.
+ */
+export function describeMoveFeasibility(rows: AxisFeasibility[]): string[] {
+  const out: string[] = [];
+  for (const r of rows) {
+    if (r.velocityOk === false && r.accelOk === false) {
+      out.push(`${r.name}: the controller says this move exceeds both its top speed and its acceleration.`);
+    } else if (r.velocityOk === false) {
+      out.push(`${r.name}: the controller says this move exceeds the motor's top speed — it will not track it.`);
+    } else if (r.accelOk === false) {
+      out.push(`${r.name}: the controller says this move accelerates harder than the motor can follow.`);
+    } else if (r.velocityOk === null && r.accelOk === null) {
+      out.push(`${r.name}: the controller did not answer whether this move is achievable — treat it as unchecked.`);
+    }
+  }
+  return out;
+}
+
+/** True when nothing the device told us should stop the pass. */
+export const moveIsFeasible = (rows: AxisFeasibility[]): boolean =>
+  rows.every((r) => r.velocityOk !== false && r.accelOk !== false);

@@ -1,6 +1,6 @@
 # Digest: @graffik-ng/nmx-protocol
 
-**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.24) · 390 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
+**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.25) · 398 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
 
 ## packet.ts — codec
 
@@ -91,6 +91,14 @@ Namespaces returning `Packet`: `general` (sub 0), `motors` (1–3, `Motor = 1|2|
 - `mergeLensLibrary(existing, incoming)` → `{merged, added, updated, rejected}`. **A malformed entry does NOT sink the import** — the survivors go in and the casualties are named. Deliberately the opposite of a move file: a move is one indivisible thing, a library is a collection. `merged` is always sorted by kind then name so a picker is readable.
 - `validateLensLibraryEntry` delegates to `validateLensMap` — an entry that would be rejected as a map cannot be used, and finding that out at apply time is too late.
 - `lensEntryToMap` / `lensMapToEntry` **copy** their marks; mutating one must not reach the other.
+
+### Is this move physically possible? (ADR-0031)
+
+- The controller has always answered this and we never asked: key-frame **105** (`validateVel`) / **106** (`validateAccel`) for the *currently selected* axis, classic **general 129** (`validateProgram`) with **motor 120** naming the axis. `keyFrame.setAxis` is a pure pointer assignment, so asking after an upload cannot disturb the program it is checking.
+- `describeMoveFeasibility(rows)` / `moveIsFeasible(rows)` in `move.ts` — pure, and **silent about axes the device is happy with**. `null` means *not asked / no answer* and **does not block**: being unable to ask is not being told no, and a check that blocks on a timeout gets switched off.
+- **motor 120 is safe to ask** because it is `msAutoSet(motor, validateOnly = true)` — the same routine without that flag re-picks the microstep setting and writes EEPROM.
+- **`computeVelocities` now refuses non-finite input.** `undefined <= undefined` is false, so points with the wrong field name passed the strictly-increasing check and every abscissa reached the wire as `NaN`. It is the one function every uploaded move goes through.
+- **Simulator:** models 105/106 from the **peak of the sampled spline**, not the knot velocities — a two-point move has zero velocity at both keys and all its speed in between, and the first version of the model passed 5000 steps/s on a 1000 steps/s rig. Also fixed key-frame **121**, which fell through to a bare ack and made the recorder's device timing read as "incomplete" for two versions.
 
 ### The vocabulary is checked against the dispatch (ADR-0029)
 

@@ -85,6 +85,24 @@ function reverses(points: readonly Required<KeyFramePoint>[], i0: number, i1: nu
  */
 export function computeVelocities(points: readonly KeyFramePoint[]): Required<KeyFramePoint>[] {
   if (points.length < 2) throw new Error("a move needs at least 2 key frames");
+  /* Refuse non-finite input rather than produce it.
+     The strictly-increasing check below compares with `<=`, and `undefined <=
+     undefined` is false — so a caller passing points with the wrong field name
+     sailed straight through and every abscissa reached the wire as NaN. Found
+     by writing a test wrong, which is a perfectly good way to find it. This is
+     the one function every uploaded move goes through; it should be the last
+     place a NaN can survive. */
+  points.forEach((p, i) => {
+    if (!Number.isFinite(p.time)) {
+      throw new Error(`key frame ${i} has no usable time (got ${String(p.time)}) — a move is points in time`);
+    }
+    if (!Number.isFinite(p.position)) {
+      throw new Error(`key frame ${i} has no usable position (got ${String(p.position)})`);
+    }
+    if (p.velocity !== undefined && !Number.isFinite(p.velocity)) {
+      throw new Error(`key frame ${i} has a non-finite velocity (got ${String(p.velocity)})`);
+    }
+  });
   for (let i = 1; i < points.length; i++) {
     if (points[i].time <= points[i - 1].time) {
       throw new Error(`key frame times must be strictly increasing (index ${i})`);

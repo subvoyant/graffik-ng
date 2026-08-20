@@ -370,6 +370,27 @@ The first version of the notice was the full five-line paragraph, in the rail, w
 
 **Also fixed while in there:** the nmx-protocol digest still listed `withinLimit` / `clampToLimit` in the limits section. The v0.17 dead-export audit deleted both and nobody updated the line. That is the third instance of inventory-and-negative prose rotting while the additive prose stays current — and this time I found it by reading the section I was about to edit, which is the only reliable trigger I have.
 
+## 2026-08-19 (v0.25 — the controller could always tell us, and we never asked)
+
+The last big item from v0.23's coverage report, and the most embarrassing one: **`queryVelocityValid` and `queryAccelValid` have been in the command vocabulary since the key-frame engine shipped, called by nothing.** The controller runs `validateVel()` and `validateAccel()` on the spline we just uploaded, and general 129 does the same for the classic program with motor 120 naming the axis. Twenty-four versions of uploading moves without ever asking whether the rig can do them.
+
+- **The failure mode is what makes it matter.** A move that demands more than a motor can deliver does not throw, does not stop, does not warn — **it just fails to track**. On a shoot that reads as a belt problem, then a payload problem, then a software bug, in that order, and the afternoon is gone before anyone suspects the move itself.
+- **One pre-flight, two questions, in the order that matters.** `preflightPass(engine)` asks the device whether the move is achievable, then arms cues and lens lanes. It had to sit *outside* `armCuesForPass`, whose `if (!cues && !lanes) return true` skips everything when nothing is attached — and a plain three-axis move with no cues is exactly the case where "can the rig do this" still matters. That early return is why folding the check into the cue gate would have quietly done nothing for the commonest move in the app.
+- **Not being able to ask is not being told no.** An unanswered query records `null`, reads as *"treat it as unchecked"*, and **does not block**. Refusing there would stop every pass the moment a query times out, which is precisely how a safety check gets switched off permanently.
+- **Silent when there is nothing to say.** No "Slide: fine / Pan: fine / Tilt: fine". A pre-flight that prints three reassurances is one people learn to scroll past.
+- `msAutoSet(motor, validateOnly = true)` is why motor 120 is safe to ask — the same routine *without* that flag re-picks the microstep setting and writes EEPROM. Worth checking before shipping a query, and this is the third time that habit has paid.
+
+### Two more found while building it, both in things I had already shipped
+
+- **The simulator was answering questions it had never been asked.** `handleKeyFrame`'s `default: return this.ack()` meant 105, 106 **and 121** all came back as a bare ack. So key-frame run time has been garbage against the simulator since v0.23, and the flight recorder's device-timing check had been quietly reading "incomplete" — a feature I built two versions ago to catch a different silent lie, itself silently lied to. Hub invariant 23, once more: **a simulator more permissive than the device means every test passes and the rig fails.**
+- **My first model of it was wrong in the same permissive direction.** I checked `max|dn|` — the **knot** velocities — and it cheerfully passed a move travelling 5000 steps in one second on a 1000 steps/s rig. A two-point move has **zero velocity at both keys and all of its speed in between**. Knot velocities are not the answer to "how fast does this go"; the curve is. It samples the Hermite now.
+
+### And one in the oldest code in the project
+
+Writing that test I passed `{ timeMs, position }` where the core wants `{ time, position }`. It did not throw. **`computeVelocities` compares times with `<=`, and `undefined <= undefined` is false**, so the strictly-increasing guard passed, and every abscissa reached the wire as `NaN`. The product path never hit it — `filmAxesToMs` produces the right shape, and the CLI smoke test runs a real pass — but this is the one function every uploaded move goes through, and it should be the last place a NaN can survive. It now refuses non-finite time, position or caller velocity by name and index.
+
+Found by writing a test wrong. Worth saying plainly, because the instinct is to fix the test and move on, and the bug was in the code the test was wrong *at*.
+
 ## Open items
 - **NEXT (software):** sustained-cue tail dragging, cue duplication, a saved cue-preset library. MIDI last, and only on real need (every Node binding is native; Web MIDI would breach ADR-0007).
 - **NEXT (hardware, imminent): real NMX contact** — usbserial port, Connect, report firmware version (gate expects v70). Then KF vs classic replay fidelity (ratifies ADR-0006), **tune the soft-limit margins**, and **measure the rig calibration** (ADR-0015 export is untrustworthy until it exists).

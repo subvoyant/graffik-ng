@@ -163,6 +163,15 @@ export const general = {
   /** cmd 30 — persist current position across a power cycle (writes EEPROM). */
   setRestorePosition: (on: boolean) => gen(30, bool(on)),
   /**
+   * query 129 — can every motor reach the speed the currently set 2-point
+   * program needs? (`validateProgram()`)
+   *
+   * The device's own answer to "is this move physically possible". A move that
+   * demands more than a motor can deliver does not fail loudly — it just fails
+   * to track, and on a shoot that reads as a belt problem or a software bug.
+   */
+  queryProgramValid: () => gen(129),
+  /**
    * query 125 — the classic program's own total run time, ms (`totalProgramTime()`
    * = lead-in + travel + lead-out of the longest enabled motor).
    *
@@ -282,6 +291,14 @@ export const motors = {
   queryProgramStop: (m: Motor) => motor(m, 112),
   /** query 113 — travel shots/time. */
   queryTravel: (m: Motor) => motor(m, 113),
+  /**
+   * query 120 — can THIS motor reach the velocity the 2-point program needs?
+   *
+   * `msAutoSet(motor, validateOnly = true)` — the `validateOnly` flag is why
+   * this is safe to ask: the same routine without it re-picks the microstep
+   * setting and writes EEPROM. Asking never changes anything.
+   */
+  queryTwoPointVelocityValid: (m: Motor) => motor(m, 120),
   /**
    * query 124 — is this motor mid "send to"?
    *
