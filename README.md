@@ -120,7 +120,8 @@ and executed on-device, so host timing never enters the picture
 ## Documentation
 
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — setup, daily loop, packaging, troubleshooting
-- [`docs/HARDWARE-BRINGUP.md`](docs/HARDWARE-BRINGUP.md) — first-contact protocol, repeatability testing, safe limits
+- [`docs/FIRST-SESSION-CARD.md`](docs/FIRST-SESSION-CARD.md) — **one page, read it at the rig**: what to check, in order, and what each answer means
+- [`docs/HARDWARE-BRINGUP.md`](docs/HARDWARE-BRINGUP.md) — the full procedure behind the card: first contact, repeatability, rig calibration, lens axes
 - [`docs/adr/`](docs/adr/README.md) — architecture decision records (the *why*)
 - [`docs/digests/HUB.md`](docs/digests/HUB.md) — system map and invariants (the *how*)
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — conventions and hard rules

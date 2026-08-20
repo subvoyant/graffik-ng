@@ -8,6 +8,11 @@ Written **before** hardware arrives so the session is spent shooting, not decidi
 > protocol, its own sample packets, its dispatch source, and a simulator — but
 > **never against motors**. Treat step 1 as genuinely unknown.
 
+> **At the rig, use [FIRST-SESSION-CARD.md](FIRST-SESSION-CARD.md).** It is one
+> page, in the order things happen, with what each answer means. This document is
+> the full procedure and the reasoning; the card is what you read with a camera
+> on the head.
+
 ## Before you plug anything in
 
 - [ ] **Sanity-check the rig with the stock NMX Motion app.** Does it move? Does

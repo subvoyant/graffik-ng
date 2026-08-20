@@ -412,6 +412,31 @@ Seven versions today, and the shape of it is worth recording. v0.21 built the fl
 
 **Every one of those came from following evidence rather than from a backlog.** The chain has now run out: the coverage report's high-value items are closed, and the next candidates are conveniences. The right next input is a real NMX.
 
+## 2026-08-20 (v0.27 — does the app still start, and one page to read at the rig)
+
+Two things, both about the gap between "the checks pass" and "this works".
+
+### Nothing in check.sh had ever loaded the Electron main process
+
+Eight steps covering the core, the CLI, the reference firmware, protocol parity, dead exports and the command vocabulary — and **not one of them loads `main.js`**. Seven versions in a day added roughly fifteen IPC handlers, a startup read of the recordings folder, controller state captured on connect and a plan-type read-back, all verified either as pure core or in a browser against the renderer's preview stub, which is precisely the half where the main process does not exist.
+
+- **`ipcMain.handle` throws on a duplicate channel.** Register one string twice and the app is dead before the window opens, and `node --check` sees a perfectly valid file.
+- **A preload method invoking a channel nobody handles fails only when somebody clicks it** — on a shoot, the worst available moment. I added `classicCheck` / `nmx:classic-check` as a pair one version ago and nothing but my own care connected the two halves.
+
+So: `audit-ipc.mjs` matches the two surfaces (82 handlers, 82 invoked, agreeing), and `smoke-electron.sh` boots the real app under `xvfb-run` and fails on an early exit or a fault. Both in CI.
+
+- **It skips loudly.** No xvfb (macOS, most laptops) and it says which, and says the Linux leg is the one that must pass. **A check that quietly does nothing is worse than an absent one, because the green tick is a claim.**
+- The fault-pattern list is deliberately narrow. A broad grep would trip on the first harmless deprecation notice and get switched off, which is how a check dies.
+- **It found nothing** — which is the answer you want from a check added this late, and no reason not to have it.
+
+### The bring-up doc had become unreadable at the moment it is needed
+
+`HARDWARE-BRINGUP.md` has grown across seven versions, with version-specific checks bolted into each phase: verify the one-shot latch, read the plan type back, watch `ms/sample`, compare the device denominator, test the feasibility gate in both directions. All correct, all necessary, and **nobody standing at a rig with a camera on the head is going to extract eleven scattered items from three hundred lines.**
+
+`FIRST-SESSION-CARD.md` is one page in the order things happen, and every item says **what the answer means** rather than just what to look at. It ends with the five things most likely to be wrong, ranked by what they would cost — the percent denominator first, because it is silent and produces plausible numbers.
+
+The full document stays; the card points at it. **Writing the procedure was necessary; making it usable under time pressure is a different job, and I had not done it.**
+
 ## Open items
 - **NEXT (software):** sustained-cue tail dragging, cue duplication, a saved cue-preset library. MIDI last, and only on real need (every Node binding is native; Web MIDI would breach ADR-0007).
 - **NEXT (hardware, imminent): real NMX contact** — usbserial port, Connect, report firmware version (gate expects v70). Then KF vs classic replay fidelity (ratifies ADR-0006), **tune the soft-limit margins**, and **measure the rig calibration** (ADR-0015 export is untrustworthy until it exists).

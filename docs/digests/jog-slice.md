@@ -1,6 +1,6 @@
 # Digest: apps/jog-slice (Electron app)
 
-**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.26) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
+**Verified against** `apps/jog-slice/*` @ 2026-08-20 (v0.27) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
 
 ## Shape
 
@@ -265,6 +265,13 @@ Settings live in `prefs.export` — **calibration is a property of the rig, not 
 - **Forbidden zones on the timeline.** `axisScale()` grows each track's y-range to *include* taught limits — capped at 60% of the move's own span per side so a distant bound can't squash the curve flat. Inside the view, the zone beyond a bound is shaded and the bound drawn as a dashed hairline; still off-scale (i.e. huge headroom, not a hazard) it becomes a **faint hairline pinned to the track edge**, deliberately weaker so "bound exists, far away" never reads as "forbidden here". Before this, auto-scaling on data alone made a limit invisible whenever it sat more than 15% outside the move — the case where the reassurance matters most (found by rendering the UI headless and looking at it, 2026-08-17).
 - **Gamepad settings modal** — per-axis binding rows with a **"bind…" learn mode** (captures whichever stick moves past 0.5, so the user never has to know axis indices — controller axis numbering is not standardized across pads), invert checkbox, and ballistics sliders (deadzone / curve / max speed) over a **live response-curve canvas** that redraws as you drag. Writes through `setPrefs`.
 - **Shortcut overlay** (`?`) — grouped key table. Both modals share `.modal/.sheet` styling and close on Esc / backdrop click; Esc handling is centralized so it can't fight the e-stop binding.
+
+## Does it still start? (v0.27 — ADR-0033)
+
+- **`scripts/audit-ipc.mjs`** matches `ipcMain.handle` in `main.js` against `ipcRenderer.invoke` in `preload.cjs`: a **duplicate registration throws at startup** (dead app), and a channel invoked but not handled **fails only when somebody clicks it**. 82 handlers, 82 invoked, agreeing.
+- **`scripts/smoke-electron.sh`** boots the real app under `xvfb-run` and fails on an early exit or a reported fault. Nothing else in `check.sh` loads the main process at all — everything else is pure core, the CLI, the firmware shim, or the renderer against its browser stub, which is exactly the half where `main.js` does not exist.
+- It **skips loudly** where it cannot run (no xvfb on macOS). A check that quietly does nothing is worse than an absent one, because the green tick is a claim.
+- It asserts the app **starts**, not that it is correct. That is what the tests and the headless render passes are for.
 
 ## Known gaps (intentional)
 

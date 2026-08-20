@@ -52,6 +52,26 @@ jobs:
       - name: Protocol parity — simulator vs firmware
         run: node firmware/graffik-trig/test/parity.mjs
 
+      # The command vocabulary against the firmware dispatch, from a committed
+      # fact table — CI never needs the GPL clone.
+      - name: Command vocabulary vs the dispatch
+        run: node scripts/audit-vocabulary.mjs --strict
+
+      # A duplicate ipcMain.handle throws at startup, and a preload method
+      # invoking a channel nobody handles fails only when somebody clicks it.
+      - name: IPC surface — main and preload agree
+        run: node scripts/audit-ipc.mjs
+
+      # Nothing above loads the Electron main process. This boots the real app
+      # under a virtual display and fails on a crash or an early exit. It skips
+      # itself, loudly, on macOS (no xvfb) — the ubuntu leg is the one that
+      # must pass.
+      - name: The app actually starts
+        working-directory: apps/jog-slice
+        run: npm ci
+      - name: Boot the app headlessly
+        run: ./scripts/smoke-electron.sh
+
   package-macos:
     needs: test
     runs-on: macos-latest

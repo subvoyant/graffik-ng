@@ -37,3 +37,4 @@ Immutable decision records. Accepted = in force. Supersede, never edit. See ADR-
 | [0030](0030-taught-limits-and-a-moving-origin.md) | A taught limit is a step count; if the controller's origin moves, it is void | Accepted (unverified against hardware) |
 | [0031](0031-ask-the-device-if-the-move-is-possible.md) | Ask the controller whether the move is physically possible, before running it | Accepted (unverified against hardware) |
 | [0032](0032-recordings-survive-the-session.md) | A recording is written to disk the moment the pass ends | Accepted |
+| [0033](0033-does-the-app-still-start.md) | Check that the app still starts, and that its two IPC halves agree | Accepted |

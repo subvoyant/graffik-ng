@@ -51,6 +51,12 @@ node scripts/audit-exports.mjs --strict
 step "command vocabulary vs the firmware dispatch"
 node scripts/audit-vocabulary.mjs --strict
 
+step "IPC surface: main and preload agree"
+node scripts/audit-ipc.mjs
+
+step "the app actually starts"
+./scripts/smoke-electron.sh
+
 step "protocol parity — TypeScript simulator vs C++ firmware"
 node firmware/graffik-trig/test/parity.mjs
 
