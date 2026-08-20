@@ -36,3 +36,4 @@ Immutable decision records. Accepted = in force. Supersede, never edit. See ADR-
 | [0029](0029-vocabulary-audit-against-the-dispatch.md) | The command vocabulary is checked against the firmware dispatch, in CI | Accepted |
 | [0030](0030-taught-limits-and-a-moving-origin.md) | A taught limit is a step count; if the controller's origin moves, it is void | Accepted (unverified against hardware) |
 | [0031](0031-ask-the-device-if-the-move-is-possible.md) | Ask the controller whether the move is physically possible, before running it | Accepted (unverified against hardware) |
+| [0032](0032-recordings-survive-the-session.md) | A recording is written to disk the moment the pass ends | Accepted |

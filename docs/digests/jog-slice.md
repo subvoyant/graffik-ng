@@ -1,6 +1,6 @@
 # Digest: apps/jog-slice (Electron app)
 
-**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.25) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
+**Verified against** `apps/jog-slice/*` @ 2026-08-19 (v0.26) · Electron ^43.4.0 · serialport ^12 · electron-builder ^26 (`npm run dist` → unsigned dmg in `release/`)
 
 ## Shape
 
@@ -179,6 +179,7 @@ Layout is a fixed frame — appbar / rail(244px) / stage / statusbar — with **
 - On `trace-end` the app reads the **device's own elapsed and its own denominator** (key-frame 121/122, classic general 102/125) and hands over the duration it uploaded, so `timingCheck` can compare them (ADR-0029). The verdict goes to the pass log and, indented under its own pass, into the bring-up report.
 - **Overlay: the axis's own hue, dashed and thinner.** Identity belongs to the series (ADR-0012); provenance is style. A recorded Slide in a fifth colour would read as a fifth thing. Direct-labelled `N recorded passes · dashed`, because a dash pattern is not self-explanatory. Capped at 4 shown, and the cap says so when it drops one.
 - **`axisScale()` includes the overlays.** A deviation big enough to leave the lane is the most important thing the overlay could show; scaling from the plan alone would draw it outside the box. Same defect as v0.6's invisible taught limits.
+- **Recordings are written to `userData/recordings/` the instant a pass ends (ADR-0032), disk BEFORE the in-memory list** — the array's cap drops the oldest, so saving after it could have discarded a pass before writing it. Previous sessions load at startup through `parsePassTrace`; one unreadable file is skipped and counted. Nothing is ever deleted: the 50-file load limit bounds what is *read*, not what is kept. A failed write says so in the pass log with the remedy.
 - `◉ Passes…` modal (the rail height budget is spent — new configuration goes in a modal): recordings with coverage, overlay/vs-plan/CSV per pass, and a two-pass comparison. Wording comes from `window.trace.deviationLines`, not restated here.
 
   ![The Recorded passes dialog: each pass with its coverage, set-aside readings and stopped/backwards flags, and a two-pass comparison reporting one axis as a bound rather than a measurement](../images/recorded-passes.png)

@@ -184,6 +184,11 @@ Update `claude/graffik-ng-decisions.md` (or the repo's decision log) with:
 - Maximum speed that ran reliably under camera load → set as the jog clamp
 - Anything the app got wrong, in the app's own words (the status line text)
 
+Recordings are written to disk as they happen (`userData/recordings/`), so a
+restart mid-session does not cost you the day — the exact folder is printed in
+the Passes dialog and in the report. Exporting the CSVs is for taking data off
+this machine, not for keeping it.
+
 **Export the bring-up report before you leave the room** — it now carries every
 recorded pass, its coverage, and an automatic comparison of the last two complete
 passes on each engine. And export the CSVs: a recording is held in memory only, and

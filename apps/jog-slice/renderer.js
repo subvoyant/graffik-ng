@@ -188,7 +188,7 @@ if (!window.nmx) {
     traceBegin: async () => ({ recording: false, reason: "browser preview — nothing to record" }),
     passSample: async () => ({ state: pct < 100 ? 1 : 0, percent: (pct = Math.min(100, pct + 20)), running: pct < 100 }),
     traceEnd: async () => null,
-    traces: async () => ({ dropped: 0, cap: 20, items: [] }),
+    traces: async () => ({ dropped: 0, cap: 20, items: [], onDisk: 0, unreadable: 0, dir: "" }),
     traceCompare: async () => ({ ok: false, reason: "browser preview — no recordings", perAxis: [] }),
     traceVsPlan: async () => ({ ok: false, reason: "browser preview — no recordings", perAxis: [] }),
     tracePoints: async () => ({ id: "", engine: "keyframe", durationFrames: 0, series: [] }),
@@ -1019,7 +1019,8 @@ async function endRecording(endedBy) {
        ran backwards is telling you something about the pass. */
     if (c.wentBackwards) logPass(`${r.id} — the controller reported percent going BACKWARDS at least once`);
     if (c.suspect) logPass(`${r.id} — ${c.suspect} sample(s) taken mid send-to and set aside`);
-    if (r.dropped) logPass(`${r.dropped} older recording(s) dropped — only the last ${traceIndex.cap || 20} are kept`);
+    if (r.saveError) logPass(`${r.id} could NOT be written to disk (${r.saveError}) — export the CSV before quitting`);
+    if (r.dropped) logPass(`${r.dropped} older recording(s) dropped from the list — the files are still on disk`);
     for (const line of r.timing ?? []) logPass(`${r.id} — ${line}`);
     await refreshTraces();
     if (endedBy === "complete") await addOverlay(r.id);
@@ -1056,8 +1057,12 @@ const traceShown = (id) => overlays.some((o) => o.id === id);
 function renderTraceList() {
   const host = $("traceList");
   if (!host) return;
+  /* The disk count is the one that matters — the list is capped, the record is
+     not (ADR-0032). An unreadable file is named as such rather than vanishing. */
   $("traceCap").textContent =
-    `${traceIndex.items.length} kept${traceIndex.dropped ? ` · ${traceIndex.dropped} dropped` : ""}`;
+    `${traceIndex.items.length} shown · ${traceIndex.onDisk ?? traceIndex.items.length} on disk` +
+    (traceIndex.unreadable ? ` · ${traceIndex.unreadable} unreadable` : "");
+  if ($("traceDir")) $("traceDir").textContent = traceIndex.dir ?? "";
   if (!traceIndex.items.length) {
     host.innerHTML = `<div style="color:var(--ink-faint)">Nothing recorded yet. Run a pass.</div>`;
   } else {

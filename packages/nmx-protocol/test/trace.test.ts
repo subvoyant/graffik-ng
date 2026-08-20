@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   newTrace, addSample, traceCoverage, resampleByPercent,
   compareTraces, deviationFromPlan, deviationLines, traceToCsv,
-  timingCheck, motors, general, keyFrame,
+  timingCheck, parsePassTrace, motors, general, keyFrame,
 } from "../src/index.js";
 import type { PassTrace } from "../src/index.js";
 
@@ -257,5 +257,60 @@ describe("the queries this rests on are the ones the dispatch answers", () => {
     expect(keyFrame.queryMaxRunTime().command).toBe(122);
     expect(general.queryProgramTotalTime().command).toBe(125);
     expect(general.queryProgramTotalTime().subAddress).toBe(0);
+  });
+});
+
+describe("reading a recording back from disk (ADR-0032)", () => {
+  const round = (t: PassTrace) => parsePassTrace(JSON.stringify(t));
+
+  it("survives a round trip with everything that makes it a measurement", () => {
+    const t = trace("a", { microsteps: [16, 16, null] });
+    t.endedBy = "stopped";
+    t.note = "take 3";
+    t.deviceTiming = { runTimeMs: 9000, totalMs: 10000, expectedMs: 10000 };
+    addSample(t, { atMs: 0, percent: 0, position: [1, 2, null], suspect: true, costMs: 7 });
+    const back = round(t);
+    expect(back.id).toBe("a");
+    expect(back.microsteps).toEqual([16, 16, null]);
+    expect(back.endedBy).toBe("stopped");
+    expect(back.note).toBe("take 3");
+    expect(back.deviceTiming).toEqual({ runTimeMs: 9000, totalMs: 10000, expectedMs: 10000 });
+    expect(back.samples[0]).toEqual({ atMs: 0, percent: 0, position: [1, 2, null], suspect: true, costMs: 7 });
+  });
+
+  it("refuses a file it cannot vouch for, by reason", () => {
+    expect(() => parsePassTrace("[]")).toThrow(/not an object/);
+    expect(() => parsePassTrace('{"engine":"keyframe"}')).toThrow(/no id/);
+    expect(() => parsePassTrace('{"id":"a","engine":"spinning"}')).toThrow(/unknown engine/);
+    expect(() => parsePassTrace('{"id":"a","engine":"keyframe","startedAt":"x","axisNames":["A"]}')).toThrow(/no samples/);
+  });
+
+  it("drops an unusable sample rather than the whole recording", () => {
+    const json = JSON.stringify({
+      id: "a", engine: "keyframe", startedAt: "x", axisNames: ["A"], samples: [
+        { percent: 10, position: [5] },
+        { percent: "half", position: [5] },
+        { percent: 20, position: "nope" },
+        { percent: 30, position: [null] },
+      ],
+    });
+    const back = parsePassTrace(json);
+    expect(back.samples.map((s) => s.percent)).toEqual([10, 30]);
+  });
+
+  it("keeps a sample whose reading is unusable, as a null — the sample still happened", () => {
+    const json = JSON.stringify({
+      id: "a", engine: "keyframe", startedAt: "x", axisNames: ["A", "B"],
+      samples: [{ percent: 10, position: [5, "x"] }],
+    });
+    expect(parsePassTrace(json).samples[0].position).toEqual([5, null]);
+  });
+
+  it("opens a file from a future version, minus what it cannot interpret", () => {
+    const json = JSON.stringify({
+      id: "a", engine: "keyframe", startedAt: "x", axisNames: ["A"], samples: [],
+      somethingNewIn2027: { that: "this build has never heard of" },
+    });
+    expect(parsePassTrace(json).id).toBe("a");
   });
 });

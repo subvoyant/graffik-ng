@@ -57,6 +57,8 @@ export interface BringUpState {
       timing?: string[];
     }[];
     comparisons?: { title: string; result: CompareResult }[];
+    /** Where the recordings live on disk, and how many are there (ADR-0032). */
+    storage?: { dir: string; onDisk: number; unreadable: number };
   };
   lensMotors?: Partial<Record<LensAxisKind, { steps: number; maxStepsPerSec: number; invert: boolean }>>;
   triggerDevice?: string | null;
@@ -222,6 +224,14 @@ export function bringUpReport(s: BringUpState): string {
     L.push(`Sampling cost is measured, not assumed: at a 500 ms poll, a sample costing`);
     L.push(`much more than ~150 ms is most of the bus, and the poll rate is the thing to`);
     L.push(`change before anything else.`);
+    if (tr.storage) {
+      L.push("");
+      L.push(
+        `Recordings are on disk at \`${tr.storage.dir}\` — ${tr.storage.onDisk} file(s)` +
+        (tr.storage.unreadable ? `, **${tr.storage.unreadable} of which this build could not read**` : "") +
+        `. Export the CSVs too if the data has to leave this machine.`,
+      );
+    }
     for (const c of tr.comparisons ?? []) {
       L.push("");
       L.push(`**${c.title}**`);

@@ -450,6 +450,69 @@ export function deviationLines(r: CompareResult): string[] {
   );
 }
 
+/**
+ * Parse a recording written by an earlier session (ADR-0032).
+ *
+ * Throws on anything it cannot vouch for. The caller is expected to skip the
+ * file and carry on: one unreadable recording must not cost you the other
+ * nineteen, which is the lesson `prefs.recent` taught in v0.7.0 and every
+ * guarded sub-object since.
+ *
+ * Deliberately permissive about *fields it does not know* and strict about the
+ * ones it does — a file from a future version should still open, minus whatever
+ * this build cannot interpret.
+ */
+export function parsePassTrace(json: string): PassTrace {
+  const raw: unknown = JSON.parse(json);
+  /* `typeof [] === "object"`, so an array would have sailed past a bare typeof
+     check and failed later with the much less useful "no id". */
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("not an object");
+  const t = raw as Record<string, unknown>;
+  if (typeof t.id !== "string" || !t.id) throw new Error("no id");
+  if (t.engine !== "keyframe" && t.engine !== "classic") throw new Error(`unknown engine ${String(t.engine)}`);
+  if (typeof t.startedAt !== "string") throw new Error("no start time");
+  if (!Array.isArray(t.axisNames) || !t.axisNames.every((n) => typeof n === "string")) throw new Error("bad axis names");
+  if (!Array.isArray(t.samples)) throw new Error("no samples array");
+
+  const samples: PassSample[] = [];
+  for (const s of t.samples as unknown[]) {
+    if (!s || typeof s !== "object") continue;
+    const x = s as Record<string, unknown>;
+    if (typeof x.percent !== "number" || !Number.isFinite(x.percent)) continue;
+    if (!Array.isArray(x.position)) continue;
+    samples.push({
+      atMs: typeof x.atMs === "number" ? x.atMs : 0,
+      percent: x.percent,
+      /* A reading that is not a finite number becomes null rather than being
+         dropped: the sample happened, that axis just has nothing to say. */
+      position: (x.position as unknown[]).map((v) => (typeof v === "number" && Number.isFinite(v) ? v : null)),
+      suspect: Boolean(x.suspect),
+      costMs: typeof x.costMs === "number" ? x.costMs : 0,
+    });
+  }
+
+  const dt = t.deviceTiming as Record<string, unknown> | undefined;
+  const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+
+  return {
+    id: t.id,
+    engine: t.engine,
+    startedAt: t.startedAt,
+    durationFrames: typeof t.durationFrames === "number" ? t.durationFrames : 0,
+    timebase: (t.timebase as PassTrace["timebase"]) ?? { num: 24, den: 1, dropFrame: false },
+    axisNames: t.axisNames as string[],
+    microsteps: Array.isArray(t.microsteps)
+      ? (t.microsteps as unknown[]).map(num)
+      : (t.axisNames as string[]).map(() => null),
+    samples,
+    endedBy: t.endedBy === "complete" || t.endedBy === "stopped" || t.endedBy === "lost" ? t.endedBy : undefined,
+    note: typeof t.note === "string" ? t.note : undefined,
+    deviceTiming: dt
+      ? { runTimeMs: num(dt.runTimeMs), totalMs: num(dt.totalMs), expectedMs: num(dt.expectedMs) }
+      : undefined,
+  };
+}
+
 /** CSV of the raw record — one row per sample, units stated in the header. */
 export function traceToCsv(trace: PassTrace): string {
   const head = [

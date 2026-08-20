@@ -391,6 +391,27 @@ Writing that test I passed `{ timeMs, position }` where the core wants `{ time, 
 
 Found by writing a test wrong. Worth saying plainly, because the instinct is to fix the test and move on, and the bug was in the code the test was wrong *at*.
 
+## 2026-08-19 (v0.26 — the recordings survive the session)
+
+Not from the coverage report this time — from re-reading my own design. The flight recorder has held its recordings in an array of twenty since it shipped five versions ago, dropped oldest-first, gone on quit. The documented mitigation was "export the CSVs".
+
+**That is not a mitigation on a shoot.** The first hardware day is simultaneously the day the measurements matter most — first contact, the repeatability numbers, the sample-cost figure that decides the poll rate, the device-timing check that ratifies ADR-0028 — and the day the app is most likely to be restarted: a preference change, a crash, an Electron reload, a laptop lid. "Remember to export twenty CSVs before quitting" is a step nobody performs under time pressure, and its absence is silent.
+
+- **Disk first, then the list.** The in-memory array has a cap that discards the oldest; saving after it could have thrown a pass away *before writing it*. The file is the record; the array is only what the dialog can show without reading files. Getting that order right was the one thing in this slice that could have been quietly wrong forever.
+- **`parsePassTrace` in the core, not `JSON.parse` at the call site.** One unreadable file is skipped and **counted**, never allowed to cost the other nineteen — the `prefs.recent` lesson from v0.7.0, applied to a new kind of stored data. Strict about the fields it knows, permissive about the ones it does not, so a file from a future build still opens minus what this one cannot interpret.
+- **A sample with an unusable reading keeps its slot as `null`; a sample with no usable percent is dropped.** The distinction is the whole model: the sample happened either way, but percent is the join key, and a sample without one cannot be placed on the move at all.
+- **Nothing is ever deleted.** The 50-file load limit bounds what is *read* at startup, not what is kept, and the dialog shows *shown / on disk / unreadable* with the path so the counts cannot quietly disagree with the folder.
+- **A failed write says so, with the remedy** — "could NOT be written to disk, export the CSV before quitting". A recorder that silently fails to record is worse than one that never claimed to.
+- **JSON, not CSV, as the record.** The CSV flattens: it cannot carry the timebase, the per-axis microstep setting, `endedBy`, or the device-timing block that says whether percent meant what we think it meant. A recording without those is not a measurement, it is a column of numbers. The CSV is an export of the record, not the record.
+
+**One small thing caught by a test written to fail:** `parsePassTrace("[]")` threw *"no id"* rather than *"not an object"*, because `typeof [] === "object"` and an array sails past a bare typeof check. Harmless, and the wrong sentence to hand somebody staring at a folder of files.
+
+### Where this session got to
+
+Seven versions today, and the shape of it is worth recording. v0.21 built the flight recorder; checking one of its assumptions found v0.22 (the plan type was wrong, and it decides what percent is divided by); *that* motivated v0.23 (check the whole vocabulary against the dispatch, in CI), whose coverage report directly produced v0.24 (taught limits go stale when the controller's origin moves) and v0.25 (the controller could always tell us whether a move is possible, and we never asked). v0.26 closes the loop by making the resulting measurements outlive a restart.
+
+**Every one of those came from following evidence rather than from a backlog.** The chain has now run out: the coverage report's high-value items are closed, and the next candidates are conveniences. The right next input is a real NMX.
+
 ## Open items
 - **NEXT (software):** sustained-cue tail dragging, cue duplication, a saved cue-preset library. MIDI last, and only on real need (every Node binding is native; Web MIDI would breach ADR-0007).
 - **NEXT (hardware, imminent): real NMX contact** — usbserial port, Connect, report firmware version (gate expects v70). Then KF vs classic replay fidelity (ratifies ADR-0006), **tune the soft-limit margins**, and **measure the rig calibration** (ADR-0015 export is untrustworthy until it exists).

@@ -232,6 +232,16 @@ describe("recorded passes in the report (ADR-0027)", () => {
     expect(md).toMatch(/^ {2}- the device divided percent by 12000 ms/m);
   });
 
+  it("says where the recordings live, and names files it could not read", () => {
+    const md = bringUpReport({
+      at,
+      traces: { summaries: [summary()], storage: { dir: "/x/recordings", onDisk: 12, unreadable: 2 } },
+    });
+    expect(md).toMatch(/\/x\/recordings/);
+    expect(md).toMatch(/12 file\(s\)/);
+    expect(md).toMatch(/2 of which this build could not read/);
+  });
+
   it("carries the sample cost, because the poll rate cannot be chosen off the rig", () => {
     const md = bringUpReport({ at, traces: { summaries: [summary({ medianCostMs: 240 })] } });
     expect(md).toMatch(/240 ms per sample/);

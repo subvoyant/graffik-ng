@@ -28,6 +28,7 @@ import {
   capUntaughtJog, bringUpReport, PLAN_TYPE, limitTrust,
   describeMoveFeasibility, moveIsFeasible,
   newTrace, addSample, traceCoverage, compareTraces, deviationFromPlan, traceToCsv, timingCheck,
+  parsePassTrace,
   NO_LIMITS, isTaught, jogWouldExceed, violationsForFilm, describeViolations,
 } from "@graffik-ng/nmx-protocol";
 
@@ -608,6 +609,20 @@ ipcMain.handle("nmx:kf-progress", async () => {
  * (`OM_MotorMaster.ino` startISR) — a serial query costs loop time, not steps.
  */
 const TRACE_CAP = 20;
+/**
+ * Recordings are written to disk the moment a pass ends (ADR-0032).
+ *
+ * They were memory-only for five versions, which means the first hardware day —
+ * the one day the measurements matter most, and the day the app is most likely
+ * to be restarted — would have lost them to any quit. The mitigation was "export
+ * the CSVs by hand", which is not a mitigation on a shoot.
+ */
+const TRACE_DIR = path.join(app.getPath("userData"), "recordings");
+/** Loaded at startup; older files stay on disk and are counted, never deleted. */
+const TRACE_LOAD_LIMIT = 50;
+let traceFilesOnDisk = 0;
+/** Result of the startup read — declared here, filled at startup, read by IPC. */
+let traceLoad = { loaded: 0, skipped: 0, onDisk: 0 };
 let traces = [];
 let activeTrace = null;
 let traceSeq = 0;
@@ -711,17 +726,65 @@ ipcMain.handle("nmx:trace-end", async (_e, endedBy, expectedMs) => {
   } catch { /* leave the nulls; timingCheck says so out loud */ }
   activeTrace.deviceTiming = timing;
   const cov = traceCoverage(activeTrace);
-  traces.push(activeTrace);
-  while (traces.length > TRACE_CAP) { traces.shift(); traceDropped++; }
   const id = activeTrace.id;
   const timingLines = timingCheck(activeTrace);
+  /* Disk FIRST. The file is the record; the in-memory array is only what the
+     dialog can show without reading files, and it has a cap that drops the
+     oldest. Saving after the cap could have discarded a pass before writing it. */
+  const saved = await saveTrace(activeTrace);
+  traces.push(activeTrace);
+  while (traces.length > TRACE_CAP) { traces.shift(); traceDropped++; }
+  traceFilesOnDisk++;
   activeTrace = null;
-  return { id, coverage: cov, dropped: traceDropped, timing: timingLines };
+  return {
+    id, coverage: cov, dropped: traceDropped, timing: timingLines,
+    saved: typeof saved === "string" ? saved : null,
+    saveError: typeof saved === "string" ? null : saved.error,
+  };
 });
+
+/** Write one recording. Failures are logged into the returned status, never thrown. */
+async function saveTrace(trace) {
+  try {
+    await fs.mkdir(TRACE_DIR, { recursive: true });
+    const stamp = trace.startedAt.slice(0, 19).replace(/[:T]/g, "-");
+    const file = path.join(TRACE_DIR, `${stamp}-${trace.id}.json`);
+    await fs.writeFile(file, JSON.stringify({ ...trace, appVersion: app.getVersion() }, null, 1), "utf-8");
+    return file;
+  } catch (e) {
+    return { error: e.message };
+  }
+}
+
+/**
+ * Read previous sessions back. One unreadable file is skipped and counted — it
+ * must not cost you the other nineteen (the `prefs.recent` lesson, v0.7.0).
+ */
+function loadTraces() {
+  let names = [];
+  try { names = fsSync.readdirSync(TRACE_DIR).filter((n) => n.endsWith(".json")).sort(); }
+  catch { return { loaded: 0, skipped: 0, onDisk: 0 }; }
+  traceFilesOnDisk = names.length;
+  let skipped = 0;
+  for (const name of names.slice(-TRACE_LOAD_LIMIT)) {
+    try { traces.push(parsePassTrace(fsSync.readFileSync(path.join(TRACE_DIR, name), "utf-8"))); }
+    catch { skipped++; }
+  }
+  /* Keep ids unique against this session's counter, so a reloaded `pass-3` and a
+     new `pass-3` cannot collide in the compare dropdowns. */
+  traceSeq = traces.length;
+  return { loaded: traces.length, skipped, onDisk: traceFilesOnDisk };
+}
 
 ipcMain.handle("nmx:traces", () => ({
   dropped: traceDropped,
   cap: TRACE_CAP,
+  dir: TRACE_DIR,
+  onDisk: traceFilesOnDisk,
+  /* Said out loud rather than swallowed: a file this build could not read is a
+     recording somebody made and cannot see. */
+  unreadable: traceLoad.skipped,
+  loadLimit: TRACE_LOAD_LIMIT,
   items: traces.map((t) => ({
     id: t.id, engine: t.engine, startedAt: t.startedAt, note: t.note,
     endedBy: t.endedBy, microsteps: t.microsteps, coverage: traceCoverage(t),
@@ -1092,6 +1155,7 @@ ipcMain.handle("nmx:bringup-report", async (e, extra) => {
            being asked. It is the number the session exists to produce, and a
            report that made you go and click something to get it would mostly
            be written without it. */
+        storage: { dir: TRACE_DIR, onDisk: traceFilesOnDisk, unreadable: traceLoad.skipped },
         comparisons: (() => {
           const out = [];
           for (const engine of ["keyframe", "classic"]) {
@@ -1572,6 +1636,9 @@ function createWindow() {
 }
 
 loadPrefs();
+/* Previous sessions' recordings, before the first window opens, so the Passes
+   dialog has them the moment it is asked (ADR-0032). */
+traceLoad = loadTraces();
 app.whenReady().then(createWindow);
 app.on("window-all-closed", async () => {
   /* Close the trigger transports too, and abort before closing: a board left

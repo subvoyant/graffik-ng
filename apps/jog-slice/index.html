@@ -692,6 +692,10 @@ input[type=text] { font-size: 11.5px; }
       </div>
       <header class="subhead">Recordings <span class="grow"></span><span id="traceCap" class="chip dim"></span></header>
       <div id="traceList" style="font-size:11px"></div>
+      <div style="font-size:10px;color:var(--ink-faint)">
+        Every pass is written to disk the moment it ends, so a restart does not cost you the session:
+        <span id="traceDir" style="font-family:var(--mono)"></span>
+      </div>
       <header class="subhead">Compare two passes</header>
       <div class="row">
         <span class="field"><label>A</label><select id="traceA"></select></span>

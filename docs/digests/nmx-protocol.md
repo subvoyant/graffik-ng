@@ -1,6 +1,6 @@
 # Digest: @graffik-ng/nmx-protocol
 
-**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.25) · 398 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
+**Verified against** `packages/nmx-protocol/src/*` @ 2026-08-19 (v0.26) · 404 tests green · vitest ^4 (audit clean) · zero runtime deps · MIT
 
 ## packet.ts — codec
 
@@ -128,6 +128,7 @@ The only module that knows what the rig **did** rather than what it was told to 
 - **The resolution floor is computed and stated.** Progress is reported in whole percent, so a matched-percent comparison cannot resolve motion finer than one percent of the path; `floorSteps` is the worst steps-per-percent over the span, and a result at or under it is worded as a **bound, not a measurement**. `deviationLines` owns that wording — the app bridges it (`window.trace`) rather than restating it, so the modal and the bring-up report cannot disagree about the same number.
 - `addSample` deliberately does **not** clamp, dedupe or enforce monotonic percent. A controller reporting 40 then 38 is telling you something; `traceCoverage().wentBackwards` surfaces it.
 - `timingCheck(trace)` (ADR-0029) compares the device's own denominator against the duration we uploaded — key-frame query **122** is literally `kf_getMaxProgramTime()`, the number percent was divided by; general **125** is the classic equivalent. This catches ADR-0028's bug class **from the rig** rather than from a mode read-back, which only catches the cause already known. Quiet when there is nothing to say.
+- `parsePassTrace(json)` (ADR-0032) reads a recording written by an earlier session. **Strict about what it knows, permissive about what it does not** — a file from a future build opens minus what this one cannot interpret. Throws by reason so the caller can skip ONE file and keep the rest (the `prefs.recent` lesson). A sample with an unusable reading keeps its slot as `null` (it happened); a sample with no usable percent is dropped (percent is the join key — it cannot be placed).
 - `traceToCsv` puts the **microstep setting in the column header** — a step count with no microstep is not a measurement.
 
 ## report.ts — the bring-up report (ADR-0023, traces added in v0.21)
